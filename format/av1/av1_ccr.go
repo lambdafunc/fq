@@ -11,15 +11,21 @@ import (
 	"github.com/wader/fq/pkg/scalar"
 )
 
+var av1CCRav1OBUGroup decode.Group
+
 func init() {
-	interp.RegisterFormat(decode.Format{
-		Name:        format.AV1_CCR,
-		Description: "AV1 Codec Configuration Record",
-		DecodeFn:    ccrDecode,
-	})
+	interp.RegisterFormat(
+		format.AV1_CCR,
+		&decode.Format{
+			Description: "AV1 Codec Configuration Record",
+			DecodeFn:    ccrDecode,
+			Dependencies: []decode.Dependency{
+				{Groups: []*decode.Group{format.AV1_OBU}, Out: &av1CCRav1OBUGroup},
+			},
+		})
 }
 
-func ccrDecode(d *decode.D, _ any) any {
+func ccrDecode(d *decode.D) any {
 	d.FieldU1("marker")
 	d.FieldU7("version")
 	d.FieldU3("seq_profile")
@@ -34,13 +40,15 @@ func ccrDecode(d *decode.D, _ any) any {
 	d.FieldU3("reserved = 0")
 	initalPreDelay := d.FieldBool("initial_presentation_delay_present")
 	if initalPreDelay {
-		d.FieldU4("initial_presentation_delay", scalar.ActualUAdd(1))
+		d.FieldU4("initial_presentation_delay", scalar.UintActualAdd(1))
 	} else {
 		d.FieldU4("reserved")
 	}
-	if d.BitsLeft() > 0 {
-		d.FieldRawLen("config_obus", d.BitsLeft())
-	}
+	d.FieldArray("config_obus", func(d *decode.D) {
+		for d.BitsLeft() > 0 {
+			d.FieldFormat("config_obu", &av1CCRav1OBUGroup, nil)
+		}
+	})
 
 	return nil
 }

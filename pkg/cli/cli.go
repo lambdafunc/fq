@@ -14,8 +14,9 @@ import (
 	"runtime"
 
 	"github.com/wader/fq/pkg/interp"
+	"golang.org/x/term"
 
-	"github.com/wader/readline"
+	"github.com/ergochat/readline"
 )
 
 func maybeLogFile() {
@@ -27,6 +28,7 @@ func maybeLogFile() {
 	}
 }
 
+// function implementing readline.AutoComplete interface
 type autoCompleterFn func(line []rune, pos int) (newLine [][]rune, length int)
 
 func (a autoCompleterFn) Do(line []rune, pos int) (newLine [][]rune, length int) {
@@ -35,8 +37,10 @@ func (a autoCompleterFn) Do(line []rune, pos int) (newLine [][]rune, length int)
 
 type stdOS struct {
 	rl            *readline.Instance
+	historyFile   string
 	closeChan     chan struct{}
 	interruptChan chan struct{}
+	completerFn   interp.CompleteFn
 }
 
 func newStandardOS() *stdOS {
@@ -77,19 +81,22 @@ func newStandardOS() *stdOS {
 
 func (stdOS) Platform() interp.Platform {
 	return interp.Platform{
-		OS:   runtime.GOOS,
-		Arch: runtime.GOARCH,
+		OS:        runtime.GOOS,
+		Arch:      runtime.GOARCH,
+		GoVersion: runtime.Version(),
 	}
 }
 
 type fdTerminal uintptr
 
 func (fd fdTerminal) Size() (int, int) {
-	w, h, _ := readline.GetSize(int(fd))
+	w, h, _ := term.GetSize(int(fd))
+	// TODO: old version return 0 on no terminal
+	w, h = max(0, w), max(0, h)
 	return w, h
 }
 func (fd fdTerminal) IsTerminal() bool {
-	return readline.IsTerminal(int(fd))
+	return term.IsTerminal(int(fd))
 }
 
 type stdinInput struct {
@@ -144,11 +151,27 @@ func (*stdOS) Args() []string { return os.Args }
 func (*stdOS) Environ() []string { return os.Environ() }
 
 func (*stdOS) ConfigDir() (string, error) {
-	p, err := os.UserConfigDir()
+	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(p, "fq"), nil
+	fqDir := filepath.Join(configDir, "fq")
+
+	if runtime.GOOS != "darwin" {
+		return fqDir, nil
+	}
+
+	// this is to support fallback to ~/.config on macOS/darwin
+	if _, err := os.Stat(fqDir); err == nil {
+		return fqDir, nil
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(homeDir, ".config", "fq"), nil
 }
 
 type stdOSFS struct{}
@@ -169,18 +192,17 @@ func (o *stdOS) Readline(opts interp.ReadlineOpts) (string, error) {
 		historyFile = filepath.Join(cacheDir, "fq/history")
 		_ = os.MkdirAll(filepath.Dir(historyFile), 0700)
 
-		o.rl, err = readline.NewEx(&readline.Config{
+		cfg := &readline.Config{
 			HistoryFile:       historyFile,
 			HistorySearchFold: true,
-		})
-		if err != nil {
-			return "", err
+			Undo:              true,
 		}
-	}
+		cfg.AutoComplete = autoCompleterFn(func(line []rune, pos int) (newLine [][]rune, length int) {
+			if o.completerFn == nil {
+				return nil, 0
+			}
 
-	if opts.CompleteFn != nil {
-		o.rl.Config.AutoComplete = autoCompleterFn(func(line []rune, pos int) (newLine [][]rune, length int) {
-			names, shared := opts.CompleteFn(string(line), pos)
+			names, shared := o.completerFn(string(line), pos)
 			var runeNames [][]rune
 			for _, name := range names {
 				runeNames = append(runeNames, []rune(name[shared:]))
@@ -188,7 +210,15 @@ func (o *stdOS) Readline(opts interp.ReadlineOpts) (string, error) {
 
 			return runeNames, shared
 		})
+		o.rl, err = readline.NewEx(cfg)
+		if err != nil {
+			return "", err
+		}
+		o.historyFile = historyFile
 	}
+
+	// inject completer to autocompleter
+	o.completerFn = opts.CompleteFn
 
 	o.rl.SetPrompt(opts.Prompt)
 	line, err := o.rl.Readline()
@@ -205,7 +235,7 @@ func (o *stdOS) Readline(opts interp.ReadlineOpts) (string, error) {
 
 func (o *stdOS) History() ([]string, error) {
 	// TODO: refactor history handling to use internal fs?
-	r, err := os.Open(o.rl.Config.HistoryFile)
+	r, err := os.Open(o.historyFile)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +276,7 @@ func Main(r *interp.Registry, version string) {
 		}
 
 		if err := i.Main(context.Background(), sos.Stdout(), version); err != nil {
-			if ex, ok := err.(interp.Exiter); ok { //nolint:errorlint
+			if ex, ok := err.(interp.Exiter); ok {
 				return ex.ExitCode()
 			}
 			return 1

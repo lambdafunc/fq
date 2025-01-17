@@ -11,12 +11,12 @@ import (
 	"github.com/wader/fq/pkg/interp"
 )
 
-func TestPath(t *testing.T, registry *interp.Registry) {
+func TestPath(t *testing.T, registry *interp.Registry, update bool) {
 	difftest.TestWithOptions(t, difftest.Options{
 		Path:        ".",
 		Pattern:     "*.fqtest",
 		ColorDiff:   os.Getenv("DIFF_COLOR") != "",
-		WriteOutput: os.Getenv("WRITE_ACTUAL") != "",
+		WriteOutput: os.Getenv("WRITE_ACTUAL") != "" || update,
 		Fn: func(t *testing.T, path, input string) (string, string, error) {
 			t.Parallel()
 
@@ -43,7 +43,7 @@ func TestPath(t *testing.T, registry *interp.Registry) {
 
 					err = i.Main(context.Background(), cr.Stdout(), "testversion")
 					if err != nil {
-						if ex, ok := err.(interp.Exiter); ok { //nolint:errorlint
+						if ex, ok := err.(interp.Exiter); ok {
 							cr.ActualExitCode = ex.ExitCode()
 						}
 					}

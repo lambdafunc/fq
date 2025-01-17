@@ -1,19 +1,20 @@
 ### Known bugs to fix
 
-- `fq -n '"aabbccdd" | hex | tobytes[1:] | raw | tobytes'` create binary `aabbcc` should be `bbccdd`. I think decode (raw in this case) is confused by root value buffer.
+- `fq -n '"aabbccdd" | hex | tobytes[1:] | decode("bytes") | tobytes'` create binary `aabbcc` should be `bbccdd`. I think decode (raw in this case) is confused by root value buffer.
 - Buffers/string duality is confusing, most string functions should be wrapped to understand binary.
 - REPL cancel seems to sometimes exit a sub-REPl without properly cleanup options.
 - Value errors, can only be accessed with `._error`.
-- Framed (add unknown in gaps) decode should be on struct level not format?
+- Framed (add unknown gaps) decode should be on struct level not format?
 - `tovalue({bits_format: "base64"})` only affect root value.
 - Auto complete of non-global variables is broken. `scope` is broken for variables.
-- `echo '{} {} {}' | jq` vs `echo '{} {} {}' | fq` works differently. fq currently decodes one root format and might add unknown fields etc. Maybe should work differently for `json` format?
+- `echo '{} {} {}' | jq` vs `echo '{} {} {}' | fq` works differently. fq currently decodes one root format and might add unknown gap fields etc. Maybe should work differently for `json` format?
 - `format/0` overlap with jq builtin `format/1`. What to rename it to? `decode_format`?
-- repl expression returning a value that produced lots of output can't be interrupted. This is becaus ctrl-c currently only interrupts the eval interpreter, outputted value is printed (`display`) by parent interpreter.
+- repl expression returning a value that produced lots of output can't be interrupted. This is because ctrl-c currently only interrupts the eval interpreter, outputted value is printed (`display`) by parent interpreter.
 - Rework cli/repl user interrupt (context cancel via ctrl-c), see comment in Interp.Main
 - Optimize `Interp.Options` calls, now called per display. Cache per eval? needs to handle nested evals.
 - `<array decode value>[{start: ...: end: ...}]` syntax a bit broken.
 - REPL completion might have side effcts. Make interp.Function type know and wrap somehow? input, inputs, open, ...
+- Rework group arguments so that `{is_probe:true}` is not needed. Look up group name and see if it has an argument somehow?
 
 ### TODO and ideas
 
@@ -57,7 +58,7 @@
 
 ### Tests
 
-- WRITE_ACTUAL does not preserve comment order for readlines
+- update tests does not preserve comment order for readlines
 - empty file test
 - CLI tests, raw write, colors?
 - Interactive tests
@@ -117,12 +118,6 @@
 - `0b` -> `1.7976931348623157e+308` something fishy with bin/hex/... literals change
 - Do something similar to `builtin.go` in gojq to speedup a bit
 - remove `scopedump`?
-
-#### Readline
-
-- Use something else than `github.com/chzyer/readline`?
-- Fixes for readline
-  - Undo (ctrl+-) normal readline bahave differently for backspace (history for each character)
 
 #### Big things
 

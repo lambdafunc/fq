@@ -5,8 +5,6 @@ include "decode";
 
 def intdiv(a; b): _intdiv(a; b);
 
-def trim: capture("^\\s*(?<str>.*?)\\s*$"; "").str;
-
 # does +1 and [:1] as " "*0 is null
 def rpad($s; $w): . + ($s * ($w+1-length))[1:];
 
@@ -108,12 +106,11 @@ def table(colmap; render):
 # TODO: rename keys and add more, ascii/utf8/utf16/codepoint name?, le/be, signed/unsigned?
 # TODO: move?
 def iprint:
-  {
-    bin: "0b\(toradix(2))",
-    oct: "0o\(toradix(8))",
-    dec: "\(.)",
-    hex: "0x\(toradix(16))",
-    str: (try ([.] | implode) catch null),
+  { bin: "0b\(to_radix(2))"
+  , oct: "0o\(to_radix(8))"
+  , dec: "\(.)"
+  , hex: "0x\(to_radix(16))"
+  , str: (try ([.] | implode) catch null)
   };
 
 # produce a/b pairs for diffing values

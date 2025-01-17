@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/wader/fq/internal/mathex"
+	"github.com/wader/fq/internal/mathx"
 	"github.com/wader/fq/internal/recoverfn"
 )
 
@@ -14,7 +14,7 @@ type RecoverableErrorer interface {
 
 type FormatError struct {
 	Err        error
-	Format     Format
+	Format     *Format
 	Stacktrace recoverfn.Raw
 }
 
@@ -72,7 +72,7 @@ func (e IOError) Error() string {
 	}
 
 	return fmt.Sprintf("%s: failed at position %s (read size %s seek pos %s): %s",
-		prefix, mathex.Bits(e.Pos).StringByteBits(10), mathex.Bits(e.ReadSize).StringByteBits(10), mathex.Bits(e.SeekPos).StringByteBits(10), e.Err)
+		prefix, mathx.Bits(e.Pos).StringByteBits(10), mathx.Bits(e.ReadSize).StringByteBits(10), mathx.Bits(e.SeekPos).StringByteBits(10), e.Err)
 }
 func (e IOError) Unwrap() error { return e.Err }
 
@@ -84,7 +84,7 @@ type DecoderError struct {
 }
 
 func (e DecoderError) Error() string {
-	return fmt.Sprintf("error at position %s: %s", mathex.Bits(e.Pos).StringByteBits(16), e.Reason)
+	return fmt.Sprintf("error at position %s: %s", mathx.Bits(e.Pos).StringByteBits(16), e.Reason)
 }
 
 func (DecoderError) IsRecoverableError() bool { return true }

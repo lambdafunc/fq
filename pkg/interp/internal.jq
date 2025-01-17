@@ -25,20 +25,13 @@ def println: ., "\n" | print;
 def printerr: tostring | _stderr;
 def printerrln: ., "\n" | printerr;
 
-def _debug($name):
-  ( (([$name, .] | tojson) | printerrln)
-  , .
-  );
-
 # jq compat
-def debug: _debug("DEBUG");
-def debug(f): . as $c | f | debug | $c;
+def debug: (["DEBUG:", .] | tojson | printerrln), .;
+def debug(f): (f | debug | empty), .;
+# output raw string or compact json to stderr and let input thru
+def stderr: printerr, .;
 
-# jq compat, output to compact json to stderr and let input thru
-def stderr:
-  ( (tojson | printerr)
-  , .
-  );
+def _fatal_error($code): "error: \(.)\n" | halt_error($code);
 
 # try to be same exit codes as jq
 # TODO: jq seems to halt processing inputs on JSON decode error but not IO errors,
@@ -110,14 +103,14 @@ def _finally(f; fin):
 def _to_int: (. % (. + 1));
 
 # integer division
-# inspried by https://github.com/itchyny/gojq/issues/63#issuecomment-765066351
+# inspired by https://github.com/itchyny/gojq/issues/63#issuecomment-765066351
 def _intdiv($a; $b):
   ( ($a | _to_int) as $a
   | ($b | _to_int) as $b
   | ($a - ($a % $b)) / $b
   );
 
-# escape " and \
+# escape \ and "
 def _escape_ident: gsub("(?<g>[\\\\\"])"; "\\\(.g)");
 
 # format number with fixed number of decimals
@@ -213,18 +206,24 @@ def _tree_path(children; name; $v):
     | $v
     | _expr_to_path
     | _normalize_path
-    | reduce .[] as $n ($c;
-        if $n | _is_string then
-          children | map(select(name == $n))
-        else
-          .[$n]
+    | reduce .[] as $n (
+        $c;
+        if . then
+          if $n | _is_string then
+            children | map(select(name == $n))
+          else
+            .[$n]
+          end
+        else empty
         end
       )
     );
   def _path:
     [ . as $r
     | $v._path as $p
-    | foreach range(($p | length)/2) as $i (null; null;
+    | foreach range(($p | length)/2) as $i (
+        null;
+        null;
         ( ($r | getpath($p[0:($i+1)*2]) | name) as $name
         | [($r | getpath($p[0:($i+1)*2-1]))[] | name][0:$p[($i*2)+1]+1] as $before
         | [ $name
@@ -241,4 +240,3 @@ def _tree_path(children; name; $v):
   if $v | _is_string then _lookup
   else _path
   end;
-

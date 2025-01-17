@@ -1,5 +1,5 @@
 # to jq-flavoured json
-def _tojq($opts):
+def _to_jq($opts):
   def _is_ident: test("^[a-zA-Z_][a-zA-Z_0-9]*$");
   def _key: if _is_ident | not then tojson end;
   def _f($opts; $indent):
@@ -45,13 +45,13 @@ def _tojq($opts):
   ( _f($opts; $opts.indent * " ")
   | if _is_array then flatten | join("") end
   );
-def tojq($opts):
-  _tojq(
-    ( { indent: 0,
-        key_sep: ":",
-        object_sep: ",",
-        array_sep: ",",
-        compound_newline: "",
+def to_jq($opts):
+  _to_jq(
+    ( { indent: 0
+      , key_sep: ":"
+      , object_sep: ","
+      , array_sep: ","
+      , compound_newline: "",
       } + $opts
     | if .indent > 0  then
         ( .key_sep = ": "
@@ -62,23 +62,26 @@ def tojq($opts):
       end
     )
   );
-def tojq: tojq(null);
+def to_jq: to_jq(null);
 
 # from jq-flavoured json
-def fromjq:
+def from_jq:
   def _f:
     ( . as $v
     | .term.type
     | if . == "TermTypeNull" then null
       elif . == "TermTypeTrue" then true
       elif . == "TermTypeFalse" then false
-      elif . == "TermTypeString" then $v.term.str.str
+      elif . == "TermTypeString" then
+        if $v.term.str.queries then error("string interpolation")
+        else $v.term.str.str
+        end
       elif . == "TermTypeNumber" then $v.term.number | tonumber
       elif . == "TermTypeObject" then
         ( $v.term.object.key_vals // []
         | map(
-            { key: (.key // .key_string.str),
-              value: (.val.queries[0] | _f)
+            { key: (.key // .key_string.str)
+            , value: (.val | _f)
             }
           )
         | from_entries
@@ -87,10 +90,10 @@ def fromjq:
         ( def _a: if .op then .left, .right | _a end;
           [$v.term.array.query // empty | _a | _f]
         )
-      else error("unknown term")
+      else error("unsupported term \($v.term.type)")
       end
     );
   try
     (_query_fromstring | _f)
   catch
-    error("fromjq only supports constant literals");
+    error("from_jq only supports constant literals: \(.)");

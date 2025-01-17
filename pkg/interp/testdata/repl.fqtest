@@ -1,3 +1,4 @@
+# TODO: use test format instead of mp3_frame
 $ fq -i
 null> 
 null> .
@@ -5,9 +6,9 @@ null
 null> 1+1
 2
 null> repl({color: true})
-[90m>[39m [37mnull[39m> )
+[90m>[39m [39mnull[39m> )
         ^ unexpected token ")"
-[90m>[39m [37mnull[39m> ^D
+[90m>[39m [39mnull[39m> ^D
 null> )
       ^ unexpected token ")"
 null> 
@@ -41,8 +42,8 @@ error: err
 > number> .
 1
 > number> ^D
-null> (1 | raw | .unknown0), 1 | repl
-> .unknown0 string, ...[0:2][]> ^D
+null> (1 | mp3_frame | .gap0), 1 | repl
+> .gap0 string, ...[0:2][]> ^D
 null> def f: 1; f,f | repl
 > number, ...[0:2][]> .
 1
@@ -106,6 +107,8 @@ $ fq -i -d json . test.mp3
 json!> ^D
 $ fq -i -n '"[]" | json'
 json> ^D
+$ fq -i -d bytes . test.mp3
+binary> ^D
 $ fq -n repl
 exitcode: 3
 stderr:
