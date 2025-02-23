@@ -43,10 +43,10 @@ def input:
       catch
         ( . as $err
         | _input_decode_errors(. += {($name): $err}) as $_
-        | [ $opts.decode_format
+        | [ $opts.decode_group
           , if $err | _is_string then ": \($err)"
             # TODO: if not string assume decode itself failed for now
-            else ": failed to decode (try -d FORMAT)"
+            else ": failed to decode: try fq -d FORMAT to force format, see fq -h formats for list"
             end
           ] | join("")
         | (_error_str([$name]) | printerrln)
@@ -123,13 +123,13 @@ def _cli_eval_on_expr_error:
 # other expr error, other errors then cancel should not happen, report and halt
 def _cli_eval_on_error:
   if .error | _is_context_canceled_error then (null | halt_error(_exit_code_expr_error))
-  else halt_error(_exit_code_expr_error)
+  else _fatal_error(_exit_code_expr_error)
   end;
 # could not compile expr, report and halt
 def _cli_eval_on_compile_error:
   ( .error
   | _eval_compile_error_tostring
-  | halt_error(_exit_code_compile_error)
+  | _fatal_error(_exit_code_compile_error)
   );
 def _cli_repl_error($_):
   _eval_error("compile"; "repl can only be used from interactive repl");
@@ -137,19 +137,20 @@ def _cli_slurp_error(_):
   _eval_error("compile"; "slurp can only be used from interactive repl");
 # TODO: rewrite query to reuse _display_default_opts value? also _repl_display
 def _cli_display:
-  display(_display_default_opts);
+  display_implicit(_display_default_opts);
 # _cli_eval halts on compile errors
 def _cli_eval($expr; $opts):
   eval(
     $expr;
-    $opts + {
-      slurps: {
-        help: "_help_slurp",
-        repl: "_cli_repl_error",
-        slurp: "_cli_slurp_error"
-      },
-      catch_query: _query_func("_cli_eval_on_expr_error"),
-    };
+    ( $opts
+    + { slurps:
+          { help: "_help_slurp"
+          , repl: "_cli_repl_error"
+          , slurp: "_cli_slurp_error"
+          }
+      , catch_query: _query_func("_cli_eval_on_expr_error"),
+      }
+    );
     _cli_eval_on_error;
     _cli_eval_on_compile_error
   );
@@ -163,15 +164,15 @@ def _main:
         try (open | decode)
         catch
           ( "--argdecode \($a[0]): \(.)"
-          | halt_error(_exit_code_args_error)
+          | _fatal_error(_exit_code_args_error)
           )
       )
     );
-  ( . as {$version, $os, $arch, $args, args: [$arg0]}
+  ( . as {$version, $os, $arch, $go_version, $args, args: [$arg0]}
   # make sure we don't unintentionally use . to make things clearer
   | null
   | ( try _args_parse($args[1:]; _opt_cli_opts)
-      catch halt_error(_exit_code_args_error)
+      catch _fatal_error(_exit_code_args_error)
     ) as {parsed: $parsed_args, $rest}
   # combine default fixed opt, parsed args and -o key=value opts
   | _options_stack([
@@ -184,25 +185,36 @@ def _main:
     ]) as $_
   | options as $opts
   | if $opts.show_help then
-      ( if ($opts.show_help | type) == "boolean" then
-          ( ("banner", "", "usage", "", "example_usage", "", "args")
+      ( # if show_help is a string -h <topic> was used
+        if ($opts.show_help | type) == "boolean" then
+          ( # "" to print separators
+            ( "banner"
+            , ""
+            , "usage"
+            , ""
+            , "example_usage"
+            , ""
+            , "args"
+            )
           | if . != "" then _help($arg0; .) end
           )
         else _help($arg0; $opts.show_help)
         end
       | println
       )
-    elif $opts.show_version then "\($version) (\($os) \($arch))" | println
+    elif $opts.show_version then
+      "\($version) (\($os) \($arch) \($go_version))" | println
     elif
       ( $opts.filenames == [null] and
         $opts.null_input == false and
         ($opts.repl | not) and
         ($opts.expr_file | not) and
+        ($opts.expr_given | not) and
         stdin_tty.is_terminal and
         stdout_tty.is_terminal
       ) then
       ( (_help($arg0; "usage") | printerrln)
-      , null | halt_error(_exit_code_args_error)
+      , (null | halt_error(_exit_code_args_error))
       )
     else
       ( # store some global state

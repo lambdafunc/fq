@@ -9,7 +9,7 @@ import (
 	"io"
 
 	"github.com/wader/fq/format"
-	"github.com/wader/fq/internal/gojqex"
+	"github.com/wader/fq/internal/gojqx"
 	"github.com/wader/fq/pkg/bitio"
 	"github.com/wader/fq/pkg/decode"
 	"github.com/wader/fq/pkg/interp"
@@ -21,23 +21,25 @@ import (
 var csvFS embed.FS
 
 func init() {
-	interp.RegisterFormat(decode.Format{
-		Name:        format.CSV,
-		Description: "Comma separated values",
-		ProbeOrder:  format.ProbeOrderTextFuzzy,
-		DecodeFn:    decodeCSV,
-		DecodeInArg: format.CSVLIn{
-			Comma:   ",",
-			Comment: "#",
-		},
-		Functions: []string{"_todisplay"},
-	})
+	interp.RegisterFormat(
+		format.CSV,
+		&decode.Format{
+			Description: "Comma separated values",
+			ProbeOrder:  format.ProbeOrderTextFuzzy,
+			DecodeFn:    decodeCSV,
+			DefaultInArg: format.CSV_In{
+				Comma:   ",",
+				Comment: "#",
+			},
+			Functions: []string{"_todisplay"},
+		})
 	interp.RegisterFS(csvFS)
-	interp.RegisterFunc1("_tocsv", toCSV)
+	interp.RegisterFunc1("_to_csv", toCSV)
 }
 
-func decodeCSV(d *decode.D, in any) any {
-	ci, _ := in.(format.CSVLIn)
+func decodeCSV(d *decode.D) any {
+	var ci format.CSV_In
+	d.ArgAs(&ci)
 
 	var rvs []any
 	br := d.RawLen(d.Len())
@@ -64,7 +66,7 @@ func decodeCSV(d *decode.D, in any) any {
 		rvs = append(rvs, vs)
 	}
 
-	d.Value.V = &scalar.S{Actual: rvs}
+	d.Value.V = &scalar.Any{Actual: rvs}
 	d.Value.Range.Len = d.Len()
 
 	return nil
@@ -81,11 +83,11 @@ func toCSV(_ *interp.Interp, c []any, opts ToCSVOpts) any {
 		w.Comma = rune(opts.Comma[0])
 	}
 	for _, row := range c {
-		rs, ok := gojqex.Cast[[]any](row)
+		rs, ok := gojqx.Cast[[]any](row)
 		if !ok {
-			return fmt.Errorf("expected row to be an array, got %s", gojqex.TypeErrorPreview(row))
+			return fmt.Errorf("expected row to be an array, got %s", gojqx.TypeErrorPreview(row))
 		}
-		vs, ok := gojqex.NormalizeToStrings(rs).([]any)
+		vs, ok := gojqx.NormalizeToStrings(rs).([]any)
 		if !ok {
 			panic("not array")
 		}
@@ -93,7 +95,7 @@ func toCSV(_ *interp.Interp, c []any, opts ToCSVOpts) any {
 		for _, v := range vs {
 			s, ok := v.(string)
 			if !ok {
-				return fmt.Errorf("expected row record to be scalars, got %s", gojqex.TypeErrorPreview(v))
+				return fmt.Errorf("expected row record to be scalars, got %s", gojqx.TypeErrorPreview(v))
 			}
 			ss = append(ss, s)
 		}

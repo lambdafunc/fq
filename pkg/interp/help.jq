@@ -11,51 +11,48 @@ include "args";
 # TODO: variants, values, keywords?
 # TODO: store some other way?
 def _help_functions:
-  { length: {
-      summary: "Length of string, array, object, etc",
-      doc:
+  { length:
+      { summary: "Length of string, array, object, etc"
+      , doc:
 "- For string number of unicode codepoints
 - For array number of elements in array
 - For object number of key-value pairs
 - For null zero
 - For number the number itself
 - For boolean is an error
-",
-      examples:
-        [ [[1,2,3], "length"]
-        , ["abc", "length"]
-        , [{a: 1, b: 2}, "length"]
-        , [null, "length"]
-        , [123, "length"]
-        , [true, "length"]
-        ]
-    },
-    "..": {
-      summary: "Recursive descent of .",
-      doc:
+"
+      , examples:
+          [ [[1,2,3], "length"]
+          , ["abc", "length"]
+          , [{a: 1, b: 2}, "length"]
+          , [null, "length"]
+          , [123, "length"]
+          , [true, "length"]
+          ]
+      }
+  , "..":
+      { summary: "Recursive descent of ."
+      , doc:
 "Recursively descend . and output each value.
 Same as recurse without argument.
-",
-      examples:
-        [ ["a", ".."]
-        , [[1,2,3], ".."]
-        , [{a: 1, b: {c: 3}}, ".."]
-        ]
-    },
-    empty: {
-      summary: "Output nothing",
-      doc:
+"
+      , examples:
+          [ ["a", ".."]
+          , [[1,2,3], ".."]
+          , [{a: 1, b: {c: 3}}, ".."]
+          ]
+      }
+  , empty:
+      { summary: "Output nothing"
+      , doc:
 "Output no value, not even null, and cause backtrack.
-",
-      examples:
-        [ ["empty"]
-        , ["[1,empty,2]"]
-        ]
-    }
+"
+      , examples:
+          [ ["empty"]
+          , ["[1,empty,2]"]
+          ]
+      }
   };
-
-def help($_): error("help must be alone or last in pipeline. ex: help(length) or ... | help");
-def help: help(null);
 
 def _help_format_enrich($arg0; $f; $include_basic):
   ( if $include_basic then
@@ -70,12 +67,15 @@ def _help_format_enrich($arg0; $f; $include_basic):
           , shell: "\($arg0) -d \($f.name)\($f.decode_in_arg | to_entries | map(" -o ", .key, "=", (.value | tojson)) | join("")) . file"
           }
         , { comment: "Decode value as \($f.name)"
-          , expr: "\($f.name)(\($f.decode_in_arg | tojq))"
+          , expr: "\($f.name)(\($f.decode_in_arg | to_jq))"
           }
         ]
     end
   );
 
+# trailing help gets rewritten to _help_slurp, these are here to catch other variants
+def help($_): error("help must be alone or last in pipeline. ex: help(length) or ... | help");
+def help: help(null);
 def _help($arg0; $topic):
   ( $topic
   | if  . == "usage" then
@@ -84,12 +84,12 @@ def _help($arg0; $topic):
       ( "Example usages:"
       , "  fq . file"
       , "  fq d file"
+      , "  fq -V '.path[1].value' file"
       , "  fq tovalue file"
-      , "  fq -r totoml file.yml"
+      , "  fq -r to_toml file.yml"
       , "  fq -s -d html 'map(.html.head.title?)' *.html"
       , "  cat file.cbor | fq -d cbor torepr"
       , "  fq 'grep(\"^main$\") | parent' /bin/ls"
-      , "  fq -r 'grep_by(.protocol==\"icmp\").source_ip | tovalue' *.pcap"
       , "  fq -i"
       )
     elif . == "banner" then
@@ -144,7 +144,7 @@ def _help($arg0; $topic):
       , if $f.decode_in_arg then
           ( $f.decode_in_arg
           | to_entries
-          | map(["  \(.key)=\(.value)  ", $f.decode_in_arg_doc[.key]])
+          | map(["  \(.key)=\(.value | tojson)  ", $f.decode_in_arg_doc[.key]])
           | "Options"
           , "======="
           , ""
@@ -174,8 +174,7 @@ def _help($arg0; $topic):
           end
         )
       , ""
-      # TODO: [:-1] hack to remove extra newline as we use println later
-      , if $doc then $doc | markdown | _markdown_to_text(options.width; -2)[:-1]
+      , if $doc then $doc | markdown | _markdown_to_text(options.width; -2)
         else empty
         end
       )
@@ -237,7 +236,7 @@ def _help($arg0; $topic):
     | ($args | length) as $argc
     | if $args == null then
         # help
-        ( "Type expression to evaluate"
+        ( "Type jq expression to evaluate"
         , "help(...)   Help for topic. Ex: help(mp4), help(\"mp4\")"
         , "\\t          Completion"
         , "Up/Down     History"

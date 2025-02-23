@@ -6,7 +6,6 @@ linters:
         - errname
         - errorlint
         - exhaustive
-        - exportloopref
         - forcetypeassert
         - goimports
         - gosec
@@ -23,22 +22,45 @@ linters:
         - unconvert
         - unparam
         - wastedassign
+        - staticcheck
+        - govet
+        - copyloopvar
+
 linters-settings:
+    revive:
+        rules:
+            - name: unused-parameter
+              disabled: true
     exhaustive:
         default-signifies-exhaustive: true
     gosec:
         excludes:
             - G401
             - G501
+            - G115
+            - G406
+            - G506
     misspell:
         ignore-words:
             # elf RELA
             - rela
             - equalisation
             - synchronisation
-run:
-    timeout: 5m
-    skip-dirs:
+    govet:
+        enable-all: true
+        disable:
+            - fieldalignment
+            - shadow
+    staticcheck:
+        checks: ["all"]
+
+issues:
+    exclude-dirs:
         # allow md5
         - dev
         - doc
+        # ignore warnings in code from crypto/tls and zmap/zcrypto
+        - format/tls/tlsdecrypt
+
+run:
+    timeout: 5m

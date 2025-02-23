@@ -1,3 +1,5 @@
+# to test
+# docker run -ti -v "$PWD:$PWD" -w "$PWD" goreleaser/goreleaser:latest release --snapshot --rm-dist
 project_name: fq
 
 before:
@@ -30,17 +32,21 @@ checksum:
 
 archives:
   - files:
+      # skip all other files
       - none*
     format_overrides:
       - goos: windows
         format: zip
       - goos: darwin
         format: zip
-    replacements:
-      darwin: macos
-
-snapshot:
-  name_template: "{{.Tag}}-next"
+    # fq_0.2.0_linux_amd64.tar.gz
+    # fq_0.2.0_macos_arm64.zip
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- if eq .Os "darwin" }}macos_
+      {{- else }}{{ .Os }}_{{ end }}
+      {{- .Arch }}
 
 changelog:
   sort: asc
@@ -50,10 +56,10 @@ changelog:
 
 brews:
   - skip_upload: auto
-    tap:
+    repository:
       owner: wader
       name: homebrew-tap
-    folder: Formula
+    directory: Formula
     homepage: https://github.com/wader/fq
     description: jq for binary formats
     license: MIT

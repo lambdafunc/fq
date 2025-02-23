@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/wader/fq/format"
+	"github.com/wader/fq/internal/lazyre"
 	"github.com/wader/fq/pkg/bitio"
 	"github.com/wader/fq/pkg/decode"
 	"github.com/wader/fq/pkg/interp"
@@ -17,21 +18,24 @@ import (
 var htmlFS embed.FS
 
 func init() {
-	interp.RegisterFormat(decode.Format{
-		Name:        format.HTML,
-		Description: "HyperText Markup Language",
-		DecodeFn:    decodeHTML,
-		DecodeInArg: format.HTMLIn{
-			Seq:             false,
-			Array:           false,
-			AttributePrefix: "@",
-		},
-		Functions: []string{"_todisplay"},
-	})
+	interp.RegisterFormat(
+		format.HTML,
+		&decode.Format{
+			Description: "HyperText Markup Language",
+			ProbeOrder:  format.ProbeOrderTextFuzzy,
+			Groups:      []*decode.Group{format.Probe},
+			DecodeFn:    decodeHTML,
+			DefaultInArg: format.HTML_In{
+				Seq:             false,
+				Array:           false,
+				AttributePrefix: "@",
+			},
+			Functions: []string{"_todisplay"},
+		})
 	interp.RegisterFS(htmlFS)
 }
 
-func fromHTMLToObject(n *html.Node, hi format.HTMLIn) any {
+func fromHTMLToObject(n *html.Node, hi format.HTML_In) any {
 	var f func(n *html.Node, seq int) any
 	f = func(n *html.Node, seq int) any {
 		attrs := map[string]any{}
@@ -192,8 +196,28 @@ func fromHTMLToArray(n *html.Node) any {
 	return f(n)
 }
 
-func decodeHTML(d *decode.D, in any) any {
-	hi, _ := in.(format.HTMLIn)
+var htmlMagicRE = &lazyre.RE{S: `` +
+	`^` + // anchor to start
+	`(?i)` + // case insensitive
+	`[[:graph:][:space:]]{0,64}?` + // 0-64 non-control ASCII lazily to allow comment etc
+	`(?:` +
+	`<\s{0,20}html|` + // <html
+	// or
+	`<!DOCTYPE\s{1,20}html` + // <!DOCTYPE html
+	`)`,
+}
+
+func decodeHTML(d *decode.D) any {
+	var hi format.HTML_In
+	var pi format.Probe_In
+	d.ArgAs(&hi)
+	if d.ArgAs(&pi) {
+		// if probing the input has to start with "<html" or "<!DOCTYPE html" this
+		// is because the html parser will always succeed so we have to be careful
+		if d.RE(htmlMagicRE.Must()) == nil {
+			d.Fatalf("no <html> or <!DOCTYPE html> found")
+		}
+	}
 
 	br := d.RawLen(d.Len())
 	var r any
@@ -212,7 +236,7 @@ func decodeHTML(d *decode.D, in any) any {
 	if err != nil {
 		d.Fatalf("%s", err)
 	}
-	var s scalar.S
+	var s scalar.Any
 	s.Actual = r
 
 	d.Value.V = &s

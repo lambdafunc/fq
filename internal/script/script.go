@@ -2,6 +2,7 @@ package script
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -10,13 +11,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/wader/fq/internal/shquote"
 	"github.com/wader/fq/pkg/bitio"
 	"github.com/wader/fq/pkg/interp"
-	"golang.org/x/exp/slices"
 )
 
 var unescapeRe = regexp.MustCompile(`\\(?:t|b|n|r|0(?:b[01]{8}|x[0-f]{2}))`)
@@ -48,7 +49,7 @@ var escapeRe = regexp.MustCompile(`[^[:print:][:space:]]`)
 
 func Escape(s string) string {
 	return string(escapeRe.ReplaceAllFunc([]byte(s), func(r []byte) []byte {
-		return []byte(fmt.Sprintf(`\0x%.2x`, r[0]))
+		return fmt.Appendf(nil, `\0x%.2x`, r[0])
 	}))
 }
 
@@ -117,8 +118,9 @@ func (cr *CaseRun) getEnvInt(name string) int {
 
 func (cr *CaseRun) Platform() interp.Platform {
 	return interp.Platform{
-		OS:   "testos",
-		Arch: "testarch",
+		OS:        "testos",
+		Arch:      "testarch",
+		GoVersion: "testgo_version",
 	}
 }
 
@@ -127,7 +129,7 @@ func (cr *CaseRun) Stdin() interp.Input {
 		FileReader: interp.FileReader{
 			R: bytes.NewBufferString(cr.StdinInitial),
 		},
-		isTerminal: cr.StdinInitial == "",
+		isTerminal: cr.StdinInitial == "" || cr.getEnvInt("_STDIN_IS_TERMINAL") != 0,
 		width:      cr.getEnvInt("_STDIN_WIDTH"),
 		height:     cr.getEnvInt("_STDIN_HEIGHT"),
 	}
@@ -160,6 +162,7 @@ func (cr *CaseRun) Environ() []string {
 		"_STDOUT_WIDTH=135",
 		"_STDOUT_HEIGHT=25",
 		"_STDOUT_IS_TERMINAL=1",
+		"_STDIN_IS_TERMINAL=0",
 		"NO_COLOR=1",
 		"NO_DECODE_PROGRESS=1",
 		"COMPLETION_TIMEOUT=10", // increase to make -race work better
@@ -273,7 +276,7 @@ type Case struct {
 func (c *Case) ToActual() string {
 	var partsLineSorted []part
 	partsLineSorted = append(partsLineSorted, c.Parts...)
-	slices.SortFunc(partsLineSorted, func(a, b part) bool { return a.Line() < b.Line() })
+	slices.SortFunc(partsLineSorted, func(a, b part) int { return cmp.Compare(a.Line(), b.Line()) })
 
 	sb := &strings.Builder{}
 	for _, p := range partsLineSorted {

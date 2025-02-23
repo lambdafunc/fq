@@ -11,31 +11,36 @@ import (
 var avcNALUFormat decode.Group
 
 func init() {
-	interp.RegisterFormat(decode.Format{
-		Name:        format.AVC_AU,
-		Description: "H.264/AVC Access Unit",
-		DecodeFn:    avcAUDecode,
-		DecodeInArg: format.AvcAuIn{
-			LengthSize: 4,
-		},
-		RootArray: true,
-		RootName:  "access_unit",
-		Dependencies: []decode.Dependency{
-			{Names: []string{format.AVC_NALU}, Group: &avcNALUFormat},
-		},
-	})
+	interp.RegisterFormat(
+		format.AVC_AU,
+		&decode.Format{
+			Description: "H.264/AVC Access Unit",
+			DecodeFn:    avcAUDecode,
+			DefaultInArg: format.AVC_AU_In{
+				LengthSize: 0,
+			},
+			RootArray: true,
+			RootName:  "access_unit",
+			Dependencies: []decode.Dependency{
+				{Groups: []*decode.Group{format.AVC_NALU}, Out: &avcNALUFormat},
+			},
+		})
 }
 
-func avcAUDecode(d *decode.D, in any) any {
-	avcIn, ok := in.(format.AvcAuIn)
-	if !ok {
-		d.Fatalf("avcIn required")
+func avcAUDecode(d *decode.D) any {
+	var ai format.AVC_AU_In
+	d.ArgAs(&ai)
+
+	if ai.LengthSize == 0 {
+		// TODO: is annexb the correct name?
+		annexBDecode(d, avcNALUFormat)
+		return nil
 	}
 
 	for d.NotEnd() {
 		d.FieldStruct("nalu", func(d *decode.D) {
-			l := d.FieldU("length", int(avcIn.LengthSize)*8)
-			d.FieldFormatLen("nalu", int64(l)*8, avcNALUFormat, nil)
+			l := int64(d.FieldU("length", int(ai.LengthSize)*8)) * 8
+			d.FieldFormatLen("nalu", l, &avcNALUFormat, nil)
 		})
 	}
 

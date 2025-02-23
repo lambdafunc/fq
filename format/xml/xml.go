@@ -7,25 +7,28 @@ package xml
 // TODO: rewrite ns stack
 
 import (
+	"bufio"
 	"bytes"
 	"embed"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"html"
 	"io"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/wader/fq/format"
-	"github.com/wader/fq/internal/gojqex"
-	"github.com/wader/fq/internal/sortex"
-	"github.com/wader/fq/internal/stringsex"
+	"github.com/wader/fq/internal/gojqx"
+	"github.com/wader/fq/internal/sortx"
+	"github.com/wader/fq/internal/stringsx"
 	"github.com/wader/fq/pkg/bitio"
 	"github.com/wader/fq/pkg/decode"
 	"github.com/wader/fq/pkg/interp"
 	"github.com/wader/fq/pkg/scalar"
-	"golang.org/x/exp/slices"
 )
 
 //go:embed xml.jq
@@ -33,25 +36,26 @@ import (
 var xmlFS embed.FS
 
 func init() {
-	interp.RegisterFormat(decode.Format{
-		Name:        format.XML,
-		Description: "Extensible Markup Language",
-		ProbeOrder:  format.ProbeOrderTextFuzzy,
-		Groups:      []string{format.PROBE},
-		DecodeFn:    decodeXML,
-		DecodeInArg: format.XMLIn{
-			Seq:             false,
-			Array:           false,
-			AttributePrefix: "@",
-		},
-		Functions: []string{"_todisplay"},
-	})
+	interp.RegisterFormat(
+		format.XML,
+		&decode.Format{
+			Description: "Extensible Markup Language",
+			ProbeOrder:  format.ProbeOrderTextFuzzy,
+			Groups:      []*decode.Group{format.Probe},
+			DecodeFn:    decodeXML,
+			DefaultInArg: format.XML_In{
+				Seq:             false,
+				Array:           false,
+				AttributePrefix: "@",
+			},
+			Functions: []string{"_todisplay"},
+		})
 	interp.RegisterFS(xmlFS)
-	interp.RegisterFunc1("toxml", toXML)
-	interp.RegisterFunc0("fromxmlentities", func(_ *interp.Interp, c string) any {
+	interp.RegisterFunc1("to_xml", toXML)
+	interp.RegisterFunc0("from_xmlentities", func(_ *interp.Interp, c string) any {
 		return html.UnescapeString(c)
 	})
-	interp.RegisterFunc0("toxmlentities", func(_ *interp.Interp, c string) any {
+	interp.RegisterFunc0("to_xmlentities", func(_ *interp.Interp, c string) any {
 		return html.EscapeString(c)
 	})
 }
@@ -100,9 +104,9 @@ func (nss xmlNNStack) lookup(name xml.Name) string {
 }
 
 func (nss xmlNNStack) push(name string, url string) xmlNNStack {
-	n := append([]xmlNS{}, nss...)
+	n := slices.Clone(nss)
 	n = append(n, xmlNS{name: name, url: url})
-	return xmlNNStack(n)
+	return n
 }
 
 func elmName(space, local string) string {
@@ -112,7 +116,7 @@ func elmName(space, local string) string {
 	return space + ":" + local
 }
 
-func fromXMLToObject(n xmlNode, xi format.XMLIn) any {
+func fromXMLToObject(n xmlNode, xi format.XML_In) any {
 	var f func(n xmlNode, seq int, nss xmlNNStack) (string, any)
 	f = func(n xmlNode, seq int, nss xmlNNStack) (string, any) {
 		attrs := map[string]any{}
@@ -247,14 +251,53 @@ func fromXMLToArray(n xmlNode) any {
 	return f(n, nil)
 }
 
-func decodeXML(d *decode.D, in any) any {
-	xi, _ := in.(format.XMLIn)
+// from golang encoding/xml, copyright 2009 The Go Authors
+// the Char production of https://www.xml.com/axml/testaxml.htm,
+// Section 2.2 Characters.
+func isInCharacterRange(r rune) (inrange bool) {
+	return r == 0x09 ||
+		r == 0x0A ||
+		r == 0x0D ||
+		r >= 0x20 && r <= 0xD7FF ||
+		r >= 0xE000 && r <= 0xFFFD ||
+		r >= 0x10000 && r <= 0x10FFFF
+}
 
-	br := d.RawLen(d.Len())
+func decodeXMLSeekFirstValidRune(br io.ReadSeeker) error {
+	buf := bufio.NewReader(br)
+	r, sz, err := buf.ReadRune()
+	if err != nil {
+		return err
+	}
+	if _, err := br.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	if r == utf8.RuneError && sz == 1 {
+		return fmt.Errorf("invalid UTF-8")
+	}
+	if !isInCharacterRange(r) {
+		return fmt.Errorf("illegal character code %U", r)
+	}
+
+	return nil
+}
+
+func decodeXML(d *decode.D) any {
+	var xi format.XML_In
+	d.ArgAs(&xi)
+
+	bbr := d.RawLen(d.Len())
 	var r any
-	var err error
 
-	xd := xml.NewDecoder(bitio.NewIOReader(br))
+	br := bitio.NewIOReadSeeker(bbr)
+
+	// this reimplements same xml rune range validation as ecoding/xml but fails faster
+	if err := decodeXMLSeekFirstValidRune(br); err != nil {
+		d.Fatalf("%s", err)
+	}
+
+	xd := xml.NewDecoder(br)
+
 	xd.Strict = false
 	var n xmlNode
 	if err := xd.Decode(&n); err != nil {
@@ -266,10 +309,7 @@ func decodeXML(d *decode.D, in any) any {
 	} else {
 		r = fromXMLToObject(n, xi)
 	}
-	if err != nil {
-		d.Fatalf("%s", err)
-	}
-	var s scalar.S
+	var s scalar.Any
 	s.Actual = r
 
 	switch s.Actual.(type) {
@@ -290,7 +330,7 @@ func decodeXML(d *decode.D, in any) any {
 		switch t := t.(type) {
 		case xml.CharData:
 			if !whitespaceRE.Match([]byte(t)) {
-				d.Fatalf("root element has trailing non-whitespace %q", stringsex.TrimN(string(t), 50, "..."))
+				d.Fatalf("root element has trailing non-whitespace %q", stringsx.TrimN(string(t), 50, "..."))
 			}
 			// ignore trailing whitespace
 		case xml.ProcInst:
@@ -312,14 +352,14 @@ func xmlNameFromStr(s string) xml.Name {
 	return xml.Name{Local: s}
 }
 
-func xmlNameSort(a, b xml.Name) bool {
+func xmlNameSort(a, b xml.Name) int {
 	if a.Space != b.Space {
 		if a.Space == "" {
-			return true
+			return 1
 		}
-		return a.Space < b.Space
+		return strings.Compare(a.Space, b.Space)
 	}
-	return a.Local < b.Local
+	return strings.Compare(a.Local, b.Local)
 }
 
 type ToXMLOpts struct {
@@ -348,7 +388,8 @@ func toXMLFromObject(c any, opts ToXMLOpts) any {
 				switch {
 				case k == "#seq":
 					hasSeq = true
-					seq, _ = strconv.Atoi(v.(string))
+					s, _ := v.(string)
+					seq, _ = strconv.Atoi(s)
 				case k == "#text":
 					s, _ := v.(string)
 					n.Chardata = []byte(s)
@@ -393,12 +434,12 @@ func toXMLFromObject(c any, opts ToXMLOpts) any {
 
 		// if one #seq was found, assume all have them, otherwise sort by name
 		if orderHasSeq {
-			sortex.ProxySort(orderSeqs, n.Nodes, func(a, b int) bool { return a < b })
+			sortx.ProxySort(orderSeqs, n.Nodes, func(a, b int) bool { return a < b })
 		} else {
-			sortex.ProxySort(orderNames, n.Nodes, func(a, b string) bool { return a < b })
+			sortx.ProxySort(orderNames, n.Nodes, func(a, b string) bool { return a < b })
 		}
 
-		slices.SortFunc(n.Attrs, func(a, b xml.Attr) bool { return xmlNameSort(a.Name, b.Name) })
+		slices.SortFunc(n.Attrs, func(a, b xml.Attr) int { return xmlNameSort(a.Name, b.Name) })
 
 		return n, seq, hasSeq
 	}
@@ -471,7 +512,7 @@ func toXMLFromArray(c any, opts ToXMLOpts) any {
 			}
 		}
 
-		slices.SortFunc(n.Attrs, func(a, b xml.Attr) bool { return xmlNameSort(a.Name, b.Name) })
+		slices.SortFunc(n.Attrs, func(a, b xml.Attr) int { return xmlNameSort(a.Name, b.Name) })
 
 		for _, c := range children {
 			c, ok := c.([]any)
@@ -488,12 +529,12 @@ func toXMLFromArray(c any, opts ToXMLOpts) any {
 
 	ca, ok := c.([]any)
 	if !ok {
-		return gojqex.FuncTypeError{Name: "toxml", V: c}
+		return gojqx.FuncTypeError{Name: "to_xml", V: c}
 	}
 	n, ok := f(ca)
 	if !ok {
 		// TODO: better error
-		return gojqex.FuncTypeError{Name: "toxml", V: c}
+		return gojqx.FuncTypeError{Name: "to_xml", V: c}
 	}
 	bb := &bytes.Buffer{}
 	e := xml.NewEncoder(bb)
@@ -509,10 +550,10 @@ func toXMLFromArray(c any, opts ToXMLOpts) any {
 }
 
 func toXML(_ *interp.Interp, c any, opts ToXMLOpts) any {
-	if v, ok := gojqex.Cast[map[string]any](c); ok {
-		return toXMLFromObject(gojqex.NormalizeToStrings(v), opts)
-	} else if v, ok := gojqex.Cast[[]any](c); ok {
-		return toXMLFromArray(gojqex.NormalizeToStrings(v), opts)
+	if v, ok := gojqx.Cast[map[string]any](c); ok {
+		return toXMLFromObject(gojqx.NormalizeToStrings(v), opts)
+	} else if v, ok := gojqx.Cast[[]any](c); ok {
+		return toXMLFromArray(gojqx.NormalizeToStrings(v), opts)
 	}
-	return gojqex.FuncTypeError{Name: "toxml", V: c}
+	return gojqx.FuncTypeError{Name: "to_xml", V: c}
 }

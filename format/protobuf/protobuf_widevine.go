@@ -9,22 +9,23 @@ import (
 	"github.com/wader/fq/pkg/scalar"
 )
 
-var widevineProtoBufFormat decode.Group
+var widevineProtoBufGroup decode.Group
 
 func init() {
-	interp.RegisterFormat(decode.Format{
-		Name:        format.PROTOBUF_WIDEVINE,
-		Description: "Widevine protobuf",
-		DecodeFn:    widevineDecode,
-		Dependencies: []decode.Dependency{
-			{Names: []string{format.PROTOBUF}, Group: &widevineProtoBufFormat},
-		},
-	})
+	interp.RegisterFormat(
+		format.ProtobufWidevine,
+		&decode.Format{
+			Description: "Widevine protobuf",
+			DecodeFn:    widevineDecode,
+			Dependencies: []decode.Dependency{
+				{Groups: []*decode.Group{format.Protobuf}, Out: &widevineProtoBufGroup},
+			},
+		})
 }
 
-func widevineDecode(d *decode.D, _ any) any {
+func widevineDecode(d *decode.D) any {
 	widewinePb := format.ProtoBufMessage{
-		1: {Type: format.ProtoBufTypeEnum, Name: "algorithm", Enums: scalar.UToSymStr{
+		1: {Type: format.ProtoBufTypeEnum, Name: "algorithm", Enums: scalar.UintMapSymStr{
 			0: "unencrypted",
 			1: "aesctr",
 		}},
@@ -34,15 +35,16 @@ func widevineDecode(d *decode.D, _ any) any {
 		6: {Type: format.ProtoBufTypeString, Name: "policy"},
 		7: {Type: format.ProtoBufTypeUInt32, Name: "crypto_period_index"},
 		8: {Type: format.ProtoBufTypeBytes, Name: "grouped_license"},
-		9: {Type: format.ProtoBufTypeUInt32, Name: "protection_scheme", Enums: scalar.UToSymStr{
-			1667591779: "cenc",
-			1667392305: "cbc1",
-			1667591795: "cens",
-			1667392371: "cbcs",
+		9: {Type: format.ProtoBufTypeUInt32, Name: "protection_scheme", Enums: scalar.UintMapSymStr{
+			// FourCC
+			0x63_65_6e_63: "cenc",
+			0x63_62_63_31: "cbc1",
+			0x63_65_6e_73: "cens",
+			0x63_62_63_73: "cbcs",
 		}},
 	}
 
-	d.Format(widevineProtoBufFormat, format.ProtoBufIn{Message: widewinePb})
+	d.Format(&widevineProtoBufGroup, format.Protobuf_In{Message: widewinePb})
 
 	return nil
 }

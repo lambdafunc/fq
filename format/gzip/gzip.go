@@ -11,32 +11,34 @@ import (
 	"time"
 
 	"github.com/wader/fq/format"
+	"github.com/wader/fq/pkg/bitio"
 	"github.com/wader/fq/pkg/decode"
 	"github.com/wader/fq/pkg/interp"
 	"github.com/wader/fq/pkg/scalar"
 )
 
-var probeFormat decode.Group
+var probeGroup decode.Group
 
 func init() {
-	interp.RegisterFormat(decode.Format{
-		Name:        format.GZIP,
-		Description: "gzip compression",
-		Groups:      []string{format.PROBE},
-		DecodeFn:    gzDecode,
-		Dependencies: []decode.Dependency{
-			{Names: []string{format.PROBE}, Group: &probeFormat},
-		},
-	})
+	interp.RegisterFormat(
+		format.Gzip,
+		&decode.Format{
+			Description: "gzip compression",
+			Groups:      []*decode.Group{format.Probe},
+			DecodeFn:    gzipDecode,
+			Dependencies: []decode.Dependency{
+				{Groups: []*decode.Group{format.Probe}, Out: &probeGroup},
+			},
+		})
 }
 
-const delfateMethod = 8
+const deflateMethod = 8
 
-var compressionMethodNames = scalar.UToSymStr{
-	delfateMethod: "deflate",
+var compressionMethodNames = scalar.UintMapSymStr{
+	deflateMethod: "deflate",
 }
 
-var osNames = scalar.UToSymStr{
+var osNames = scalar.UintMapSymStr{
 	0:  "fat",
 	1:  "amiga",
 	2:  "vms",
@@ -53,14 +55,12 @@ var osNames = scalar.UToSymStr{
 	13: "acorn_riscos",
 }
 
-var deflateExtraFlagsNames = scalar.UToSymStr{
+var deflateExtraFlagsNames = scalar.UintMapSymStr{
 	2: "slow",
 	4: "fast",
 }
 
-func gzDecode(d *decode.D, _ any) any {
-	d.Endian = decode.LittleEndian
-
+func gzipDecodeMember(d *decode.D) bitio.ReaderAtSeeker {
 	d.FieldRawLen("identification", 2*8, d.AssertBitBuf([]byte("\x1f\x8b")))
 	compressionMethod := d.FieldU8("compression_method", compressionMethodNames)
 	hasHeaderCRC := false
@@ -75,9 +75,9 @@ func gzDecode(d *decode.D, _ any) any {
 		hasComment = d.FieldBool("comment")
 		d.FieldU3("reserved")
 	})
-	d.FieldU32("mtime", scalar.DescriptionUnixTimeFn(scalar.S.TryActualU, time.RFC3339))
+	d.FieldU32("mtime", scalar.UintActualUnixTimeDescription(time.Second, time.RFC3339))
 	switch compressionMethod {
-	case delfateMethod:
+	case deflateMethod:
 		d.FieldU8("extra_flags", deflateExtraFlagsNames)
 	default:
 		d.FieldU8("extra_flags")
@@ -101,25 +101,59 @@ func gzDecode(d *decode.D, _ any) any {
 
 	var rFn func(r io.Reader) io.Reader
 	switch compressionMethod {
-	case delfateMethod:
+	case deflateMethod:
 		// bitio.NewIOReadSeeker implements io.ByteReader so that deflate don't do own
 		// buffering and might read more than needed messing up knowing compressed size
 		rFn = func(r io.Reader) io.Reader { return flate.NewReader(r) }
 	}
 
+	var uncompressedBR bitio.ReaderAtSeeker
 	if rFn != nil {
-		readCompressedSize, uncompressedBR, dv, _, _ := d.TryFieldReaderRangeFormat("uncompressed", d.Pos(), d.BitsLeft(), rFn, probeFormat, nil)
-		if uncompressedBR != nil {
-			if dv == nil {
-				d.FieldRootBitBuf("uncompressed", uncompressedBR)
-			}
-			d.FieldRawLen("compressed", readCompressedSize)
-			crc32W := crc32.NewIEEE()
-			// TODO: cleanup clone
-			d.CopyBits(crc32W, d.CloneReadSeeker(uncompressedBR))
-			d.FieldU32("crc32", d.ValidateUBytes(crc32W.Sum(nil)), scalar.ActualHex)
-			d.FieldU32("isize")
+		var readCompressedSize int64
+		var err error
+		readCompressedSize, uncompressedBR, err =
+			d.FieldReaderRange("uncompressed", d.Pos(), d.BitsLeft(), rFn)
+		if err != nil {
+			d.IOPanic(err, "uncompressed", "FieldReaderRange")
 		}
+		d.FieldRawLen("compressed", readCompressedSize)
+		crc32W := crc32.NewIEEE()
+		// TODO: cleanup clone
+		d.CopyBits(crc32W, d.CloneReadSeeker(uncompressedBR))
+		d.FieldU32("crc32", d.UintValidateBytes(crc32W.Sum(nil)), scalar.UintHex)
+		d.FieldU32("isize")
+	} else {
+		d.Fatalf("unknown compression method %d", compressionMethod)
+	}
+
+	return uncompressedBR
+}
+
+func gzipDecode(d *decode.D) any {
+	d.Endian = decode.LittleEndian
+
+	var brs []bitio.ReadAtSeeker
+	d.FieldArray("members", func(d *decode.D) {
+		for !d.End() {
+			var br bitio.ReadAtSeeker
+			d.FieldStruct("member", func(d *decode.D) {
+				br = gzipDecodeMember(d)
+			})
+			brs = append(brs, br)
+		}
+	})
+
+	if len(brs) == 0 {
+		d.Fatalf("no members found")
+	}
+
+	cbr, err := bitio.NewMultiReader(brs...)
+	if err != nil {
+		d.IOPanic(err, "members", "NewMultiReader")
+	}
+	dv, _, _ := d.TryFieldFormatBitBuf("uncompressed", cbr, &probeGroup, format.Probe_In{})
+	if dv == nil {
+		d.FieldRootBitBuf("uncompressed", cbr)
 	}
 
 	return nil

@@ -16,82 +16,89 @@ package mp4
 // TODO: better probe, find first 2 boxes, should be free,ftyp or mdat?
 
 import (
+	"cmp"
 	"embed"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/wader/fq/format"
 	"github.com/wader/fq/pkg/decode"
 	"github.com/wader/fq/pkg/interp"
-	"golang.org/x/exp/slices"
 )
 
 //go:embed mp4.jq
 //go:embed mp4.md
 var mp4FS embed.FS
 
-var aacFrameFormat decode.Group
-var av1CCRFormat decode.Group
-var av1FrameFormat decode.Group
-var flacFrameFormat decode.Group
-var flacMetadatablocksFormat decode.Group
-var iccProfileFormat decode.Group
-var id3v2Format decode.Group
-var imageFormat decode.Group
-var jpegFormat decode.Group
-var mp3FrameFormat decode.Group
-var mpegAVCAUFormat decode.Group
-var mpegAVCDCRFormat decode.Group
-var mpegESFormat decode.Group
-var mpegHEVCDCRFrameFormat decode.Group
-var mpegHEVCSampleFormat decode.Group
-var mpegPESPacketSampleFormat decode.Group
-var opusPacketFrameFormat decode.Group
-var proResFrameFormat decode.Group
-var protoBufWidevineFormat decode.Group
-var psshPlayreadyFormat decode.Group
-var vorbisPacketFormat decode.Group
-var vp9FrameFormat decode.Group
-var vpxCCRFormat decode.Group
+var aacFrameGroup decode.Group
+var av1CCRGroup decode.Group
+var av1FrameGroup decode.Group
+var avcAUGroup decode.Group
+var avcDCRGroup decode.Group
+var flacFrameGroup decode.Group
+var flacMetadatablocksGroup decode.Group
+var hevcAUGroup decode.Group
+var hevcCDCRGroup decode.Group
+var iccProfileGroup decode.Group
+var id3v2Group decode.Group
+var imageGroup decode.Group
+var jp2cGroup decode.Group
+var jpegGroup decode.Group
+var mp3FrameGroup decode.Group
+var mpegESGroup decode.Group
+var mpegPESPacketSampleGroup decode.Group
+var opusPacketFrameGroup decode.Group
+var pngGroup decode.Group
+var proResFrameGroup decode.Group
+var protoBufWidevineGroup decode.Group
+var psshPlayreadyGroup decode.Group
+var vorbisPacketGroup decode.Group
+var vp9FrameGroup decode.Group
+var vpxCCRGroup decode.Group
 
 func init() {
-	interp.RegisterFormat(decode.Format{
-		Name:        format.MP4,
-		Description: "ISOBMFF, QuickTime and similar",
-		Groups: []string{
-			format.PROBE,
-			format.IMAGE, // avif
-		},
-		DecodeFn: mp4Decode,
-		DecodeInArg: format.Mp4In{
-			DecodeSamples:  true,
-			AllowTruncated: false,
-		},
-		Dependencies: []decode.Dependency{
-			{Names: []string{format.AAC_FRAME}, Group: &aacFrameFormat},
-			{Names: []string{format.AV1_CCR}, Group: &av1CCRFormat},
-			{Names: []string{format.AV1_FRAME}, Group: &av1FrameFormat},
-			{Names: []string{format.AVC_AU}, Group: &mpegAVCAUFormat},
-			{Names: []string{format.AVC_DCR}, Group: &mpegAVCDCRFormat},
-			{Names: []string{format.FLAC_FRAME}, Group: &flacFrameFormat},
-			{Names: []string{format.FLAC_METADATABLOCKS}, Group: &flacMetadatablocksFormat},
-			{Names: []string{format.HEVC_AU}, Group: &mpegHEVCSampleFormat},
-			{Names: []string{format.HEVC_DCR}, Group: &mpegHEVCDCRFrameFormat},
-			{Names: []string{format.ICC_PROFILE}, Group: &iccProfileFormat},
-			{Names: []string{format.ID3V2}, Group: &id3v2Format},
-			{Names: []string{format.IMAGE}, Group: &imageFormat},
-			{Names: []string{format.JPEG}, Group: &jpegFormat},
-			{Names: []string{format.MP3_FRAME}, Group: &mp3FrameFormat},
-			{Names: []string{format.MPEG_ES}, Group: &mpegESFormat},
-			{Names: []string{format.MPEG_PES_PACKET}, Group: &mpegPESPacketSampleFormat},
-			{Names: []string{format.OPUS_PACKET}, Group: &opusPacketFrameFormat},
-			{Names: []string{format.PRORES_FRAME}, Group: &proResFrameFormat},
-			{Names: []string{format.PROTOBUF_WIDEVINE}, Group: &protoBufWidevineFormat},
-			{Names: []string{format.PSSH_PLAYREADY}, Group: &psshPlayreadyFormat},
-			{Names: []string{format.VORBIS_PACKET}, Group: &vorbisPacketFormat},
-			{Names: []string{format.VP9_FRAME}, Group: &vp9FrameFormat},
-			{Names: []string{format.VPX_CCR}, Group: &vpxCCRFormat},
-		},
-	})
+	interp.RegisterFormat(
+		format.MP4,
+		&decode.Format{
+			Description: "ISOBMFF, QuickTime and similar",
+			Groups: []*decode.Group{
+				format.Probe,
+				format.Image, // avif
+			},
+			DecodeFn: mp4Decode,
+			DefaultInArg: format.MP4_In{
+				DecodeSamples:  true,
+				AllowTruncated: false,
+			},
+			Dependencies: []decode.Dependency{
+				{Groups: []*decode.Group{format.AAC_Frame}, Out: &aacFrameGroup},
+				{Groups: []*decode.Group{format.AV1_CCR}, Out: &av1CCRGroup},
+				{Groups: []*decode.Group{format.AV1_Frame}, Out: &av1FrameGroup},
+				{Groups: []*decode.Group{format.AVC_AU}, Out: &avcAUGroup},
+				{Groups: []*decode.Group{format.AVC_DCR}, Out: &avcDCRGroup},
+				{Groups: []*decode.Group{format.FLAC_Frame}, Out: &flacFrameGroup},
+				{Groups: []*decode.Group{format.FLAC_Metadatablocks}, Out: &flacMetadatablocksGroup},
+				{Groups: []*decode.Group{format.HEVC_AU}, Out: &hevcAUGroup},
+				{Groups: []*decode.Group{format.HEVC_DCR}, Out: &hevcCDCRGroup},
+				{Groups: []*decode.Group{format.ICC_Profile}, Out: &iccProfileGroup},
+				{Groups: []*decode.Group{format.ID3v2}, Out: &id3v2Group},
+				{Groups: []*decode.Group{format.Image}, Out: &imageGroup},
+				{Groups: []*decode.Group{format.JP2C}, Out: &jp2cGroup},
+				{Groups: []*decode.Group{format.JPEG}, Out: &jpegGroup},
+				{Groups: []*decode.Group{format.MP3_Frame}, Out: &mp3FrameGroup},
+				{Groups: []*decode.Group{format.MPEG_ES}, Out: &mpegESGroup},
+				{Groups: []*decode.Group{format.MPEG_PES_Packet}, Out: &mpegPESPacketSampleGroup},
+				{Groups: []*decode.Group{format.Opus_Packet}, Out: &opusPacketFrameGroup},
+				{Groups: []*decode.Group{format.PNG}, Out: &pngGroup},
+				{Groups: []*decode.Group{format.Prores_Frame}, Out: &proResFrameGroup},
+				{Groups: []*decode.Group{format.ProtobufWidevine}, Out: &protoBufWidevineGroup},
+				{Groups: []*decode.Group{format.PSSH_Playready}, Out: &psshPlayreadyGroup},
+				{Groups: []*decode.Group{format.Vorbis_Packet}, Out: &vorbisPacketGroup},
+				{Groups: []*decode.Group{format.VP9_Frame}, Out: &vp9FrameGroup},
+				{Groups: []*decode.Group{format.VPX_CCR}, Out: &vpxCCRGroup},
+			},
+		})
 	interp.RegisterFS(mp4FS)
 }
 
@@ -129,16 +136,21 @@ type stsz struct {
 }
 
 type track struct {
-	id                 int
-	sampleDescriptions []sampleDescription
-	subType            string
-	stco               []int64
-	stsc               []stsc
-	stsz               []stsz
-	formatInArg        any
-	objectType         int // if data format is "mp4a"
-	defaultIVSize      int
-	moofs              []*moof // for fmp4
+	seenHdlr             bool
+	fragment             bool
+	id                   int
+	sampleDescriptions   []sampleDescription
+	subType              string
+	stco                 []int64
+	stsc                 []stsc
+	stsz                 []stsz
+	formatInArg          any
+	objectType           int // if data format is "mp4a"
+	defaultIVSize        int
+	moofs                []*moof // for fmp4
+	dref                 bool
+	drefURL              string
+	stsdNumAudioChannels uint64
 }
 
 type pathEntry struct {
@@ -147,18 +159,9 @@ type pathEntry struct {
 }
 
 type decodeContext struct {
-	opts   format.Mp4In
+	opts   format.MP4_In
 	path   []pathEntry
-	tracks map[int]*track
-}
-
-func (ctx *decodeContext) lookupTrack(id int) *track {
-	t, ok := ctx.tracks[id]
-	if !ok {
-		t = &track{id: id}
-		ctx.tracks[id] = t
-	}
-	return t
+	tracks []*track
 }
 
 func (ctx *decodeContext) isParent(typ string) bool {
@@ -179,6 +182,11 @@ func (ctx *decodeContext) findParent(typ string) any {
 	return nil
 }
 
+func (ctx *decodeContext) rootBox() *rootBox {
+	t, _ := ctx.findParent("").(*rootBox)
+	return t
+}
+
 func (ctx *decodeContext) currentTrakBox() *trakBox {
 	t, _ := ctx.findParent("trak").(*trakBox)
 	return t
@@ -194,26 +202,56 @@ func (ctx *decodeContext) currentMoofBox() *moofBox {
 	return t
 }
 
+func (ctx *decodeContext) currentMetaBox() *metaBox {
+	t, _ := ctx.findParent("meta").(*metaBox)
+	return t
+}
+
 func (ctx *decodeContext) currentTrack() *track {
 	if t := ctx.currentTrakBox(); t != nil {
-		return ctx.lookupTrack(t.trackID)
+		return t.track
 	}
 	if t := ctx.currentTrafBox(); t != nil {
-		return ctx.lookupTrack(t.trackID)
+		return t.track
 	}
 	return nil
 }
 
 func mp4Tracks(d *decode.D, ctx *decodeContext) {
-	// keep track order stable
-	var sortedTracks []*track
-	for _, t := range ctx.tracks {
-		sortedTracks = append(sortedTracks, t)
+	type trackCollected struct {
+		track  *track
+		order  int
+		moofss [][]*moof
 	}
-	slices.SortFunc(sortedTracks, func(a, b *track) bool { return a.id < b.id })
+
+	var tracksCollected []*trackCollected
+	tracksCollectedSeen := map[int]*trackCollected{}
+	for i, t := range ctx.tracks {
+		tc, ok := tracksCollectedSeen[t.id]
+		if !ok {
+			tc = &trackCollected{
+				order: i,
+				track: t,
+			}
+			tracksCollectedSeen[t.id] = tc
+			tracksCollected = append(tracksCollected, tc)
+		}
+
+		// TODO: error if not fragmented and seen before?
+
+		tc.moofss = append(tc.moofss, t.moofs)
+	}
+
+	// sort by id then order in file
+	slices.SortStableFunc(tracksCollected, func(a, b *trackCollected) int {
+		if r := cmp.Compare(a.track.id, b.track.id); r != 0 {
+			return r
+		}
+		return cmp.Compare(a.order, b.order)
+	})
 
 	d.FieldArray("tracks", func(d *decode.D) {
-		for _, t := range sortedTracks {
+		for _, tc := range tracksCollected {
 			decodeSampleRange := func(d *decode.D, t *track, decodeSample bool, dataFormat string, name string, firstBit int64, nBits int64, inArg any) {
 				d.RangeFn(firstBit, nBits, func(d *decode.D) {
 					if !decodeSample {
@@ -223,36 +261,38 @@ func mp4Tracks(d *decode.D, ctx *decodeContext) {
 
 					switch {
 					case dataFormat == "fLaC":
-						d.FieldFormatLen(name, nBits, flacFrameFormat, inArg)
+						d.FieldFormatLen(name, nBits, &flacFrameGroup, inArg)
 					case dataFormat == "Opus":
-						d.FieldFormatLen(name, nBits, opusPacketFrameFormat, inArg)
+						d.FieldFormatLen(name, nBits, &opusPacketFrameGroup, inArg)
 					case dataFormat == "vp09":
-						d.FieldFormatLen(name, nBits, vp9FrameFormat, inArg)
+						d.FieldFormatLen(name, nBits, &vp9FrameGroup, inArg)
 					case dataFormat == "avc1":
-						d.FieldFormatLen(name, nBits, mpegAVCAUFormat, inArg)
+						d.FieldFormatLen(name, nBits, &avcAUGroup, inArg)
 					case dataFormat == "hev1",
 						dataFormat == "hvc1":
-						d.FieldFormatLen(name, nBits, mpegHEVCSampleFormat, inArg)
+						d.FieldFormatLen(name, nBits, &hevcAUGroup, inArg)
 					case dataFormat == "av01":
-						d.FieldFormatLen(name, nBits, av1FrameFormat, inArg)
+						d.FieldFormatLen(name, nBits, &av1FrameGroup, inArg)
 					case dataFormat == "mp4a" && t.objectType == format.MPEGObjectTypeMP3:
-						d.FieldFormatLen(name, nBits, mp3FrameFormat, inArg)
+						d.FieldFormatLen(name, nBits, &mp3FrameGroup, inArg)
 					case dataFormat == "mp4a" && t.objectType == format.MPEGObjectTypeAAC:
-						d.FieldFormatLen(name, nBits, aacFrameFormat, inArg)
+						d.FieldFormatLen(name, nBits, &aacFrameGroup, inArg)
 					case dataFormat == "mp4a" && t.objectType == format.MPEGObjectTypeVORBIS:
-						d.FieldFormatLen(name, nBits, vorbisPacketFormat, inArg)
+						d.FieldFormatLen(name, nBits, &vorbisPacketGroup, inArg)
 					case dataFormat == "mp4v" && t.objectType == format.MPEGObjectTypeMPEG2VideoMain:
-						d.FieldFormatLen(name, nBits, mpegPESPacketSampleFormat, inArg)
+						d.FieldFormatLen(name, nBits, &mpegPESPacketSampleGroup, inArg)
 					case dataFormat == "mp4v" && t.objectType == format.MPEGObjectTypeMJPEG:
-						d.FieldFormatLen(name, nBits, jpegFormat, inArg)
+						d.FieldFormatLen(name, nBits, &jpegGroup, inArg)
+					case dataFormat == "mp4v" && t.objectType == format.MPEGObjectTypePNG:
+						d.FieldFormatLen(name, nBits, &pngGroup, inArg)
 					case dataFormat == "jpeg":
-						d.FieldFormatLen(name, nBits, jpegFormat, inArg)
+						d.FieldFormatLen(name, nBits, &jpegGroup, inArg)
 					case dataFormat == "apch",
 						dataFormat == "apcn",
 						dataFormat == "scpa",
 						dataFormat == "apco",
 						dataFormat == "ap4h":
-						d.FieldFormatLen(name, nBits, proResFrameFormat, inArg)
+						d.FieldFormatLen(name, nBits, &proResFrameGroup, inArg)
 					default:
 						d.FieldRawLen(name, d.BitsLeft())
 					}
@@ -260,7 +300,9 @@ func mp4Tracks(d *decode.D, ctx *decodeContext) {
 			}
 
 			d.FieldStruct("track", func(d *decode.D) {
-				d.FieldValueU("id", uint64(t.id))
+				t := tc.track
+
+				d.FieldValueUint("id", uint64(t.id))
 
 				trackSDDataFormat := "unknown"
 				if len(t.sampleDescriptions) > 0 {
@@ -270,11 +312,16 @@ func mp4Tracks(d *decode.D, ctx *decodeContext) {
 						trackSDDataFormat = sd.originalFormat
 					}
 				}
-
 				d.FieldValueStr("data_format", trackSDDataFormat, dataFormatNames)
+
+				if t.dref && t.drefURL != "" {
+					d.FieldValueStr("data_reference_url", t.drefURL)
+					return
+				}
 
 				switch trackSDDataFormat {
 				case "lpcm",
+					"ipcm",
 					"raw ",
 					"twos",
 					"sowt",
@@ -344,8 +391,6 @@ func mp4Tracks(d *decode.D, ctx *decodeContext) {
 								}
 							}
 
-							// log.Println(logStrFn())
-
 							decodeSampleRange(d, t, ctx.opts.DecodeSamples, trackSDDataFormat, "sample", sampleOffset*8, stszEntry.size*8, t.formatInArg)
 
 							sampleOffset += stszEntry.size
@@ -356,48 +401,50 @@ func mp4Tracks(d *decode.D, ctx *decodeContext) {
 					}
 
 					sampleNr := 0
-					for _, m := range t.moofs {
-						for trunNr, trun := range m.truns {
-							var senc senc
-							if trunNr < len(m.sencs) {
-								senc = m.sencs[trunNr]
-							}
-							sampleOffset := m.offset + trun.dataOffset
 
-							for trunSampleNr, sz := range trun.samplesSizes {
-								dataFormat := trackSDDataFormat
-								if m.defaultSampleDescriptionIndex != 0 && m.defaultSampleDescriptionIndex-1 < len(t.sampleDescriptions) {
-									sd := t.sampleDescriptions[m.defaultSampleDescriptionIndex-1]
-									dataFormat = sd.dataFormat
-									if sd.originalFormat != "" {
-										dataFormat = sd.originalFormat
+					for _, ms := range tc.moofss {
+						for _, m := range ms {
+							for trunNr, trun := range m.truns {
+								var senc senc
+								if trunNr < len(m.sencs) {
+									senc = m.sencs[trunNr]
+								}
+								sampleOffset := m.offset + trun.dataOffset
+
+								for trunSampleNr, sz := range trun.samplesSizes {
+									dataFormat := trackSDDataFormat
+									if m.defaultSampleDescriptionIndex != 0 && m.defaultSampleDescriptionIndex-1 < len(t.sampleDescriptions) {
+										sd := t.sampleDescriptions[m.defaultSampleDescriptionIndex-1]
+										dataFormat = sd.dataFormat
+										if sd.originalFormat != "" {
+											dataFormat = sd.originalFormat
+										}
 									}
+
+									// logStrFn := func() string {
+									// 	return fmt.Sprintf("%d: %s: %d: (%s): sz=%d %d+%d=%d",
+									// 		t.id,
+									// 		dataFormat,
+									// 		sampleNr,
+									// 		trackSDDataFormat,
+									// 		sz,
+									// 		m.offset,
+									// 		m.dataOffset,
+									// 		sampleOffset,
+									// 	)
+									// }
+
+									decodeSample := ctx.opts.DecodeSamples
+									if trunSampleNr < len(senc.entries) {
+										// TODO: encrypted
+										decodeSample = false
+									}
+
+									decodeSampleRange(d, t, decodeSample, dataFormat, "sample", sampleOffset*8, sz*8, t.formatInArg)
+
+									sampleOffset += sz
+									sampleNr++
 								}
-
-								// logStrFn := func() string {
-								// 	return fmt.Sprintf("%d: %s: %d: (%s): sz=%d %d+%d=%d",
-								// 		t.id,
-								// 		dataFormat,
-								// 		sampleNr,
-								// 		trackSDDataFormat,
-								// 		sz,
-								// 		m.offset,
-								// 		m.dataOffset,
-								// 		sampleOffset,
-								// 	)
-								// }
-								// log.Println(logStrFn())
-
-								decodeSample := ctx.opts.DecodeSamples
-								if trunSampleNr < len(senc.entries) {
-									// TODO: encrypted
-									decodeSample = false
-								}
-
-								decodeSampleRange(d, t, decodeSample, dataFormat, "sample", sampleOffset*8, sz*8, t.formatInArg)
-
-								sampleOffset += sz
-								sampleNr++
 							}
 						}
 					}
@@ -407,13 +454,14 @@ func mp4Tracks(d *decode.D, ctx *decodeContext) {
 	})
 }
 
-func mp4Decode(d *decode.D, in any) any {
-	mi, _ := in.(format.Mp4In)
+func mp4Decode(d *decode.D) any {
+	var mi format.MP4_In
+	d.ArgAs(&mi)
 
 	ctx := &decodeContext{
 		opts:   mi,
 		path:   []pathEntry{{typ: "root"}},
-		tracks: map[int]*track{},
+		tracks: []*track{},
 	}
 
 	// TODO: nicer, validate functions without field?
@@ -422,19 +470,21 @@ func mp4Decode(d *decode.D, in any) any {
 	if size < 8 {
 		d.Fatalf("first box size too small < 8")
 	}
-	firstType := d.UTF8(4)
+	firstType := strings.TrimSpace(d.UTF8(4))
 	switch firstType {
 	case "styp", // mp4 segment
 		"ftyp", // mp4 file
 		"free", // seems to happen
 		"moov", // seems to happen
 		"pnot", // video preview file
-		"jP  ": // JPEG 2000
+		"jP":   // JPEG 2000
 	default:
 		d.Errorf("no styp, ftyp, free or moov box found")
 	}
 
 	d.SeekRel(-8 * 8)
+
+	ctx.path = []pathEntry{{typ: "", data: &rootBox{}}}
 
 	decodeBoxes(ctx, d)
 	if len(ctx.tracks) > 0 {

@@ -13,17 +13,18 @@ import (
 var vorbisComment decode.Group
 
 func init() {
-	interp.RegisterFormat(decode.Format{
-		Name:        format.OPUS_PACKET,
-		Description: "Opus packet",
-		DecodeFn:    opusDecode,
-		Dependencies: []decode.Dependency{
-			{Names: []string{format.VORBIS_COMMENT}, Group: &vorbisComment},
-		},
-	})
+	interp.RegisterFormat(
+		format.Opus_Packet,
+		&decode.Format{
+			Description: "Opus packet",
+			DecodeFn:    opusDecode,
+			Dependencies: []decode.Dependency{
+				{Groups: []*decode.Group{format.Vorbis_Comment}, Out: &vorbisComment},
+			},
+		})
 }
 
-func opusDecode(d *decode.D, _ any) any {
+func opusDecode(d *decode.D) any {
 	d.Endian = decode.LittleEndian
 
 	var prefix []byte
@@ -51,7 +52,7 @@ func opusDecode(d *decode.D, _ any) any {
 	case bytes.Equal(prefix, []byte("OpusTags")):
 		d.FieldValueStr("type", "tags")
 		d.FieldUTF8("prefix", 8)
-		d.FieldFormat("comment", vorbisComment, nil)
+		d.FieldFormat("comment", &vorbisComment, nil)
 	default:
 		d.FieldValueStr("type", "audio")
 		d.FieldStruct("toc", func(d *decode.D) {
@@ -61,44 +62,44 @@ func opusDecode(d *decode.D, _ any) any {
 					bandwidth string
 					frameSize float64
 				}{
-					0:  {"SILK-only", "NB", 10},
-					1:  {"SILK-only", "NB", 20},
-					2:  {"SILK-only", "NB", 40},
-					3:  {"SILK-only", "NB", 60},
-					4:  {"SILK-only", "MB", 10},
-					5:  {"SILK-only", "MB", 20},
-					6:  {"SILK-only", "MB", 40},
-					7:  {"SILK-only", "MB", 60},
-					8:  {"SILK-only", "WB", 10},
-					9:  {"SILK-only", "WB", 20},
-					10: {"SILK-only", "WB", 40},
-					11: {"SILK-only", "WB", 60},
-					12: {"Hybrid", "SWB", 10},
-					13: {"Hybrid", "SWB", 20},
-					14: {"Hybrid", "FB", 10},
-					15: {"Hybrid", "FB", 20},
-					16: {"CELT-only", "NB", 2.5},
-					17: {"CELT-only", "NB", 5},
-					18: {"CELT-only", "NB", 10},
-					19: {"CELT-only", "NB", 20},
-					20: {"CELT-only", "WB", 2.5},
-					21: {"CELT-only", "WB", 5},
-					22: {"CELT-only", "WB", 10},
-					23: {"CELT-only", "WB", 20},
-					24: {"CELT-only", "SWB", 2.5},
-					25: {"CELT-only", "SWB", 5},
-					26: {"CELT-only", "SWB", 10},
-					27: {"CELT-only", "SWB", 20},
-					28: {"CELT-only", "FB", 2.5},
-					29: {"CELT-only", "FB", 5},
-					30: {"CELT-only", "FB", 10},
-					31: {"CELT-only", "FB", 20},
+					0:  {"silk_only", "nb", 10},
+					1:  {"silk_only", "nb", 20},
+					2:  {"silk_only", "nb", 40},
+					3:  {"silk_only", "nb", 60},
+					4:  {"silk_only", "mb", 10},
+					5:  {"silk_only", "mb", 20},
+					6:  {"silk_only", "mb", 40},
+					7:  {"silk_only", "mb", 60},
+					8:  {"silk_only", "wb", 10},
+					9:  {"silk_only", "wb", 20},
+					10: {"silk_only", "wb", 40},
+					11: {"silk_only", "wb", 60},
+					12: {"hybrid", "swb", 10},
+					13: {"hybrid", "swb", 20},
+					14: {"hybrid", "fb", 10},
+					15: {"hybrid", "fb", 20},
+					16: {"celt_only", "nb", 2.5},
+					17: {"celt_only", "nb", 5},
+					18: {"celt_only", "nb", 10},
+					19: {"celt_only", "nb", 20},
+					20: {"celt_only", "wb", 2.5},
+					21: {"celt_only", "wb", 5},
+					22: {"celt_only", "wb", 10},
+					23: {"celt_only", "wb", 20},
+					24: {"celt_only", "swb", 2.5},
+					25: {"celt_only", "swb", 5},
+					26: {"celt_only", "swb", 10},
+					27: {"celt_only", "swb", 20},
+					28: {"celt_only", "fb", 2.5},
+					29: {"celt_only", "fb", 5},
+					30: {"celt_only", "fb", 10},
+					31: {"celt_only", "fb", 20},
 				}
 				n := d.FieldU5("config")
 				config := configurations[n]
 				d.FieldValueStr("mode", config.mode)
 				d.FieldValueStr("bandwidth", config.bandwidth)
-				d.FieldValueFloat("frame_size", config.frameSize)
+				d.FieldValueFlt("frame_size", config.frameSize)
 			})
 			d.FieldBool("stereo")
 			d.FieldStruct("frames_per_packet", func(d *decode.D) {
@@ -113,7 +114,7 @@ func opusDecode(d *decode.D, _ any) any {
 				}
 				n := d.FieldU2("config")
 				config := framesPerPacketConfigs[n]
-				d.FieldValueU("frames", config.frames)
+				d.FieldValueUint("frames", config.frames)
 				d.FieldValueStr("mode", config.mode)
 			})
 			d.FieldRawLen("data", d.BitsLeft())

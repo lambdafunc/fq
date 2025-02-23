@@ -42,10 +42,7 @@ func (r *Reader) Read(p []byte) (n int, err error) {
 			return int(copyLen), nil
 		}
 
-		readBytes := len(p)
-		if readBytes < r.minRead {
-			readBytes = r.minRead
-		}
+		readBytes := max(len(p), r.minRead)
 		if readBytes > len(r.cache) {
 			r.cache = make([]byte, readBytes)
 		}
@@ -89,4 +86,8 @@ func (r *Reader) Seek(offset int64, whence int) (int64, error) {
 	r.cacheUsed = 0
 
 	return absOff, nil
+}
+
+func (r *Reader) Unwrap() any {
+	return r.rs
 }

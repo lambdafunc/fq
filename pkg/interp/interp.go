@@ -13,18 +13,19 @@ import (
 	"io/fs"
 	"math/big"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/wader/fq/internal/ansi"
-	"github.com/wader/fq/internal/bitioex"
+	"github.com/wader/fq/internal/bitiox"
 	"github.com/wader/fq/internal/colorjson"
 	"github.com/wader/fq/internal/ctxstack"
-	"github.com/wader/fq/internal/gojqex"
-	"github.com/wader/fq/internal/ioex"
+	"github.com/wader/fq/internal/gojqx"
+	"github.com/wader/fq/internal/iox"
 	"github.com/wader/fq/internal/mapstruct"
-	"github.com/wader/fq/internal/mathex"
+	"github.com/wader/fq/internal/mathx"
 	"github.com/wader/fq/internal/pos"
 	"github.com/wader/fq/pkg/bitio"
 	"github.com/wader/fq/pkg/decode"
@@ -51,7 +52,7 @@ import (
 //go:embed init.jq
 var builtinFS embed.FS
 
-var initSource = `include "@builtin/init";`
+var initSource = `include "@builtin/init"; .`
 
 func init() {
 	RegisterIter1("_readline", (*Interp)._readline)
@@ -115,11 +116,6 @@ type Exiter interface {
 	ExitCode() int
 }
 
-// gojq halt_error uses this
-type IsEmptyErrorer interface {
-	IsEmptyError() bool
-}
-
 type Terminal interface {
 	Size() (int, int)
 	IsTerminal() bool
@@ -136,13 +132,16 @@ type Output interface {
 }
 
 type Platform struct {
-	OS   string
-	Arch string
+	OS        string
+	Arch      string
+	GoVersion string
 }
+
+type CompleteFn func(line string, pos int) (newLine []string, shared int)
 
 type ReadlineOpts struct {
 	Prompt     string
-	CompleteFn func(line string, pos int) (newLine []string, shared int)
+	CompleteFn CompleteFn
 }
 
 type OS interface {
@@ -193,12 +192,12 @@ type Value interface {
 }
 
 type Display interface {
-	Display(w io.Writer, opts Options) error
+	Display(w io.Writer, opts *Options) error
 }
 
 type JQValueEx interface {
 	gojq.JQValue
-	JQValueToGoJQEx(optsFn func() Options) any
+	JQValueToGoJQEx(optsFn func() (*Options, error)) any
 }
 
 func valuePath(v *decode.Value) []any {
@@ -287,7 +286,7 @@ func toBytes(v any) ([]byte, error) {
 			return nil, fmt.Errorf("value is not bytes")
 		}
 		buf := &bytes.Buffer{}
-		if _, err := bitioex.CopyBits(buf, br); err != nil {
+		if _, err := bitiox.CopyBits(buf, br); err != nil {
 			return nil, err
 		}
 
@@ -298,8 +297,9 @@ func toBytes(v any) ([]byte, error) {
 func queryErrorPosition(expr string, v error) pos.Pos {
 	var offset int
 
-	if tokIf, ok := v.(interface{ Token() (string, int) }); ok { //nolint:errorlint
-		_, offset = tokIf.Token()
+	var e *gojq.ParseError
+	if errors.As(v, &e) {
+		offset = e.Offset
 	}
 	if offset >= 0 {
 		return pos.NewFromOffset(expr, offset)
@@ -382,10 +382,11 @@ func (i *Interp) Main(ctx context.Context, output Output, versionStr string) err
 
 	platform := i.OS.Platform()
 	input := map[string]any{
-		"args":    args,
-		"version": versionStr,
-		"os":      platform.OS,
-		"arch":    platform.Arch,
+		"args":       args,
+		"version":    versionStr,
+		"os":         platform.OS,
+		"arch":       platform.Arch,
+		"go_version": platform.GoVersion,
 	}
 
 	iter, err := i.EvalFunc(ctx, input, "_main", nil, EvalOpts{output: output})
@@ -401,8 +402,25 @@ func (i *Interp) Main(ctx context.Context, output Output, versionStr string) err
 
 		switch v := v.(type) {
 		case error:
-			if emptyErr, ok := v.(IsEmptyErrorer); ok && emptyErr.IsEmptyError() { //nolint:errorlint
-				// no output
+			var haltErr *gojq.HaltError
+			if errors.As(v, &haltErr) {
+				if haltErrV := haltErr.Value(); haltErrV != nil {
+					if str, ok := haltErrV.(string); ok {
+						if _, err := i.OS.Stderr().Write([]byte(str)); err != nil {
+							return err
+						}
+					} else {
+						bs, _ := gojq.Marshal(haltErrV)
+						if _, err := i.OS.Stderr().Write(bs); err != nil {
+							return err
+						}
+						if _, err := i.OS.Stderr().Write([]byte{'\n'}); err != nil {
+							return err
+						}
+					}
+				}
+
+				return haltErr
 			} else if errors.Is(v, context.Canceled) {
 				// ignore context cancel here for now, which means user somehow interrupted the interpreter
 				// TODO: handle this inside interp.jq instead but then we probably have to do nested
@@ -411,8 +429,6 @@ func (i *Interp) Main(ctx context.Context, output Output, versionStr string) err
 				fmt.Fprintln(i.OS.Stderr(), v)
 			}
 			return v
-		case [2]any:
-			fmt.Fprintln(i.OS.Stderr(), v[:]...)
 		default:
 			// TODO: can this happen?
 			fmt.Fprintln(i.OS.Stderr(), v)
@@ -456,7 +472,7 @@ func (i *Interp) _readline(c any, opts readlineOpts) gojq.Iter {
 					opts.Complete,
 					[]any{line, pos},
 					EvalOpts{
-						output:       ioex.DiscardCtxWriter{Ctx: completeCtx},
+						output:       iox.DiscardCtxWriter{Ctx: completeCtx},
 						isCompleting: true,
 					},
 				)
@@ -472,7 +488,7 @@ func (i *Interp) _readline(c any, opts readlineOpts) gojq.Iter {
 				}
 
 				// {abc: 123, abd: 123} | complete(".ab"; 3) will return {prefix: "ab", names: ["abc", "abd"]}
-				r, ok := gojqex.CastFn[completionResult](v, mapstruct.ToStruct)
+				r, ok := gojqx.CastFn[completionResult](v, mapstruct.ToStruct)
 				if !ok {
 					return nil, pos, fmt.Errorf("completion result not a map")
 				}
@@ -628,7 +644,10 @@ func (i *Interp) history(c any) any {
 }
 
 func (i *Interp) _display(c any, v any) gojq.Iter {
-	opts := OptionsFromValue(v)
+	opts, err := OptionsFromValue(v)
+	if err != nil {
+		return gojq.NewIter(err)
+	}
 
 	switch v := c.(type) {
 	case Display:
@@ -647,7 +666,11 @@ func (i *Interp) _canDisplay(c any) any {
 }
 
 func (i *Interp) _hexdump(c any, v any) gojq.Iter {
-	opts := OptionsFromValue(v)
+	opts, err := OptionsFromValue(v)
+	if err != nil {
+		return gojq.NewIter(err)
+	}
+
 	bv, err := toBinary(c)
 	if err != nil {
 		return gojq.NewIter(err)
@@ -660,12 +683,34 @@ func (i *Interp) _hexdump(c any, v any) gojq.Iter {
 }
 
 func (i *Interp) _printColorJSON(c any, v any) gojq.Iter {
-	opts := OptionsFromValue(v)
-
-	cj, err := i.NewColorJSON(opts)
+	opts, err := OptionsFromValue(v)
 	if err != nil {
 		return gojq.NewIter(err)
 	}
+
+	indent := 2
+	if opts.Compact {
+		indent = 0
+	}
+
+	cj := colorjson.NewEncoder(colorjson.Options{
+		Color:  opts.Color,
+		Tab:    false,
+		Indent: indent,
+		// uses a function to cache OptionsFromValue
+		ValueFn: func(v any) (any, error) { return toValue(func() (*Options, error) { return opts, nil }, v) },
+		Colors: colorjson.Colors{
+			Reset:     []byte(ansi.Reset.SetString),
+			Null:      []byte(opts.Decorator.Null.SetString),
+			False:     []byte(opts.Decorator.False.SetString),
+			True:      []byte(opts.Decorator.True.SetString),
+			Number:    []byte(opts.Decorator.Number.SetString),
+			String:    []byte(opts.Decorator.String.SetString),
+			ObjectKey: []byte(opts.Decorator.ObjectKey.SetString),
+			Array:     []byte(opts.Decorator.Array.SetString),
+			Object:    []byte(opts.Decorator.Object.SetString),
+		},
+	})
 	if err := cj.Marshal(c, i.EvalInstance.Output); err != nil {
 		return gojq.NewIter(err)
 	}
@@ -775,7 +820,7 @@ func (i *Interp) Eval(ctx context.Context, c any, expr string, opts EvalOpts) (g
 		}
 	}
 
-	compilerOpts := append([]gojq.CompilerOption{}, funcCompilerOpts...)
+	compilerOpts := slices.Clone(funcCompilerOpts)
 	compilerOpts = append(compilerOpts, gojq.WithEnvironLoader(ni.OS.Environ))
 	compilerOpts = append(compilerOpts, gojq.WithVariables(variableNames))
 	compilerOpts = append(compilerOpts, gojq.WithModuleLoader(loadModule{
@@ -840,9 +885,8 @@ func (i *Interp) Eval(ctx context.Context, c any, expr string, opts EvalOpts) (g
 					pos:      p,
 				}
 			}
-
-			// not identity body means it returns something, threat as dynamic include
-			if q.Term == nil || q.Term.Type != gojq.TermTypeIdentity {
+			// has some root expression, threat as dynamic include
+			if q.Term != nil || q.Op != gojq.Operator(0) {
 				gc, err := gojq.Compile(q, funcCompilerOpts...)
 				if err != nil {
 					return nil, err
@@ -921,7 +965,7 @@ func (i *Interp) Eval(ctx context.Context, c any, expr string, opts EvalOpts) (g
 
 	runCtx, runCtxCancelFn := i.interruptStack.Push(ctx)
 	ni.EvalInstance.Ctx = runCtx
-	ni.EvalInstance.Output = ioex.CtxWriter{Writer: output, Ctx: runCtx}
+	ni.EvalInstance.Output = iox.CtxWriter{Writer: output, Ctx: runCtx}
 	// inherit or maybe set
 	ni.EvalInstance.IsCompleting = i.EvalInstance.IsCompleting || opts.isCompleting
 	iter := gc.RunWithContext(runCtx, c, variableValues...)
@@ -985,6 +1029,7 @@ func (i *Interp) EvalFuncValues(ctx context.Context, c any, name string, args []
 type Options struct {
 	Depth          int
 	ArrayTruncate  int
+	StringTruncate int
 	Verbose        bool
 	Width          int
 	DecodeProgress bool
@@ -1005,81 +1050,107 @@ type Options struct {
 	DisplayBytes int
 	Addrbase     int
 	Sizebase     int
+	SkipGaps     bool
 
 	Decorator    Decorator
 	BitsFormatFn func(br bitio.ReaderAtSeeker) (any, error)
 }
 
-func OptionsFromValue(v any) Options {
+func OptionsFromValue(v any) (*Options, error) {
 	var opts Options
 	_ = mapstruct.ToStruct(v, &opts)
-	opts.ArrayTruncate = mathex.Max(0, opts.ArrayTruncate)
-	opts.Depth = mathex.Max(0, opts.Depth)
-	opts.Addrbase = mathex.Clamp(2, 36, opts.Addrbase)
-	opts.Sizebase = mathex.Clamp(2, 36, opts.Sizebase)
-	opts.LineBytes = mathex.Max(0, opts.LineBytes)
-	opts.DisplayBytes = mathex.Max(0, opts.DisplayBytes)
+	opts.ArrayTruncate = max(0, opts.ArrayTruncate)
+	opts.StringTruncate = max(0, opts.StringTruncate)
+	opts.Depth = max(0, opts.Depth)
+	opts.Addrbase = mathx.Clamp(2, 36, opts.Addrbase)
+	opts.Sizebase = mathx.Clamp(2, 36, opts.Sizebase)
+	opts.LineBytes = max(1, opts.LineBytes)
+	opts.DisplayBytes = max(0, opts.DisplayBytes)
 	opts.Decorator = decoratorFromOptions(opts)
-	opts.BitsFormatFn = bitsFormatFnFromOptions(opts)
+	if fn, err := bitsFormatFnFromOptions(opts); err != nil {
+		return nil, err
+	} else {
+		opts.BitsFormatFn = fn
+	}
 
-	return opts
+	return &opts, nil
 }
 
-func bitsFormatFnFromOptions(opts Options) func(br bitio.ReaderAtSeeker) (any, error) {
+func bitsFormatFnFromOptions(opts Options) (func(br bitio.ReaderAtSeeker) (any, error), error) {
 	switch opts.BitsFormat {
 	case "md5":
 		return func(br bitio.ReaderAtSeeker) (any, error) {
 			d := md5.New()
-			if _, err := bitioex.CopyBits(d, br); err != nil {
+			if _, err := bitiox.CopyBits(d, br); err != nil {
 				return "", err
 			}
 			return hex.EncodeToString(d.Sum(nil)), nil
-		}
+		}, nil
+	case "hex":
+		return func(br bitio.ReaderAtSeeker) (any, error) {
+			b := &bytes.Buffer{}
+			e := hex.NewEncoder(b)
+			if _, err := bitiox.CopyBits(e, br); err != nil {
+				return "", err
+			}
+			return b.String(), nil
+		}, nil
 	case "base64":
 		return func(br bitio.ReaderAtSeeker) (any, error) {
 			b := &bytes.Buffer{}
 			e := base64.NewEncoder(base64.StdEncoding, b)
-			if _, err := bitioex.CopyBits(e, br); err != nil {
+			if _, err := bitiox.CopyBits(e, br); err != nil {
 				return "", err
 			}
 			e.Close()
 			return b.String(), nil
-		}
+		}, nil
 	case "truncate":
 		// TODO: configure
 		return func(br bitio.ReaderAtSeeker) (any, error) {
 			b := &bytes.Buffer{}
-			if _, err := bitioex.CopyBits(b, bitio.NewLimitReader(br, 1024*8)); err != nil {
+			if _, err := bitiox.CopyBits(b, bitio.NewLimitReader(br, 1024*8)); err != nil {
 				return "", err
 			}
 			return b.String(), nil
-		}
+		}, nil
 	case "string":
 		return func(br bitio.ReaderAtSeeker) (any, error) {
 			b := &bytes.Buffer{}
-			if _, err := bitioex.CopyBits(b, br); err != nil {
+			if _, err := bitiox.CopyBits(b, br); err != nil {
 				return "", err
 			}
 			return b.String(), nil
-		}
+		}, nil
 	case "snippet":
-		fallthrough
-	default:
 		return func(br bitio.ReaderAtSeeker) (any, error) {
 			b := &bytes.Buffer{}
 			e := base64.NewEncoder(base64.StdEncoding, b)
-			if _, err := bitioex.CopyBits(e, bitio.NewLimitReader(br, 256*8)); err != nil {
+			if _, err := bitiox.CopyBits(e, bitio.NewLimitReader(br, 256*8)); err != nil {
 				return "", err
 			}
 			e.Close()
-
-			brLen, err := bitioex.Len(br)
+			brLen, err := bitiox.Len(br)
 			if err != nil {
 				return nil, err
 			}
 
-			return fmt.Sprintf("<%s>%s", mathex.Bits(brLen).StringByteBits(opts.Sizebase), b.String()), nil
-		}
+			return fmt.Sprintf("<%s>%s", mathx.Bits(brLen).StringByteBits(opts.Sizebase), b.String()), nil
+		}, nil
+	case "byte_array":
+		return func(br bitio.ReaderAtSeeker) (any, error) {
+			b := &bytes.Buffer{}
+			if _, err := bitiox.CopyBits(b, br); err != nil {
+				return "", err
+			}
+			var v []any
+			for _, bv := range b.Bytes() {
+				v = append(v, int(bv))
+			}
+			return v, nil
+		}, nil
+	default:
+		return nil, fmt.Errorf("invalid bits format %q", opts.BitsFormat)
 	}
 }
 
@@ -1110,34 +1181,4 @@ func (i *Interp) includePaths() []string {
 func (i *Interp) slurps() map[string]any {
 	slurpsAny, _ := i.lookupState("slurps").(map[string]any)
 	return slurpsAny
-}
-
-func (i *Interp) NewColorJSON(opts Options) (*colorjson.Encoder, error) {
-	indent := 2
-	if opts.Compact {
-		indent = 0
-	}
-
-	return colorjson.NewEncoder(
-		opts.Color,
-		false,
-		indent,
-		func(v any) any {
-			if v, ok := toValue(func() Options { return opts }, v); ok {
-				return v
-			}
-			panic(fmt.Sprintf("toValue not a JQValue value: %#v (%T)", v, v))
-		},
-		colorjson.Colors{
-			Reset:     []byte(ansi.Reset.SetString),
-			Null:      []byte(opts.Decorator.Null.SetString),
-			False:     []byte(opts.Decorator.False.SetString),
-			True:      []byte(opts.Decorator.True.SetString),
-			Number:    []byte(opts.Decorator.Number.SetString),
-			String:    []byte(opts.Decorator.String.SetString),
-			ObjectKey: []byte(opts.Decorator.ObjectKey.SetString),
-			Array:     []byte(opts.Decorator.Array.SetString),
-			Object:    []byte(opts.Decorator.Object.SetString),
-		},
-	), nil
 }
